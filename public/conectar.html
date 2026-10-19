@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f59e0b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Restaurante">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Conectar dispositivos</title><link rel="stylesheet" href="/style.css">
+<style>
+  .wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px; }
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; } .tabs .btn.active { background: var(--accent); color: var(--accent-ink); }
+  .net { display: grid; grid-template-columns: 300px 1fr; gap: 20px; align-items: center; }
+  .qr { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 8px; width: 300px; height: 300px; }
+  .qr img { width: 100%; height: 100%; display: block; }
+  .url { font: 600 20px/1.3 ui-monospace, Consolas, monospace; word-break: break-all; background: var(--panel2); padding: 12px; border-radius: 10px; margin: 8px 0; }
+  ol { padding-left: 20px; line-height: 1.8; }
+  .alt { margin-top: 14px; }
+  @media (max-width: 700px) { .net { grid-template-columns: 1fr; justify-items: center; } }
+</style>
+</head><body>
+<div class="wrap">
+  <h1>📱 Conectar celulares y tablets</h1>
+  <p class="muted">El dispositivo debe estar conectado al <b>mismo WiFi</b> que esta computadora, y la app debe estar abierta.</p>
+  <div class="tabs" id="tabs"></div>
+  <div class="card net" id="main"><p class="muted">Buscando dirección de red…</p></div>
+  <div class="card alt hidden" id="alt"></div>
+  <div class="card alt"><b>📲 Instalar como app en el celular o tablet</b>
+    <p class="muted" style="margin:6px 0">Se hace una sola vez en cada dispositivo, después de abrir la dirección del QR e iniciar sesión.</p>
+    <p><b>iPhone / iPad (Safari):</b> toca el botón Compartir <span aria-hidden="true">⬆️</span> → <b>Agregar a pantalla de inicio</b> → Agregar.</p>
+    <p style="margin-top:8px"><b>Android (Chrome):</b> toca el menú <b>⋮</b> → <b>Agregar a la pantalla principal</b> (o <b>Instalar app</b> si aparece) → Agregar.</p>
+    <details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Android: si se abre con la barra del navegador y no a pantalla completa</summary>
+      <p class="muted" style="margin-top:6px">Chrome solo permite la instalación completa en conexiones seguras (HTTPS). En red local, puedes autorizarla una vez en ese celular: abre en Chrome <b>chrome://flags/#unsafely-treat-insecure-origin-as-secure</b>, escribe la dirección de arriba sin la ruta (por ejemplo <b>http://192.168.101.3:3000</b>), pon <b>Enabled</b>, toca <b>Relaunch</b> y vuelve a instalarla desde el menú ⋮.</p></details>
+    <p class="muted" style="margin-top:8px;font-size:13px">Si cambia el IP de esta PC, la app instalada deberá agregarse otra vez con la nueva dirección.</p></div>
+  <div class="card alt"><b>Cómo usarlo</b>
+    <ol><li>En el celular, abre la cámara y apunta al código QR (o escribe la dirección en el navegador).</li>
+    <li>Toca el enlace que aparece. Se abrirá la pantalla elegida.</li>
+    <li>Instálala como app en el celular (ver abajo) para que tenga su icono y abra a pantalla completa.</li></ol>
+    <p class="muted" style="margin-top:8px">Si no abre: revisa que sea el mismo WiFi (no el de invitados) y que el firewall permita el puerto <b id="port">3000</b>.</p></div>
+</div>
+<script src="/app.js"></script>
+<script>
+const SCREENS = [['/mesero.html', '📝 Mesero'], ['/cocina.html?e=cocina', '👨‍🍳 Cocina'], ['/cocina.html?e=barra', '🍹 Barra'], ['/caja.html', '💵 Caja'], ['/', '🏠 Inicio']];
+let screen = SCREENS[0][0], net = null, ipIdx = 0;
+
+const urlFor = (ip) => `http://${ip}:${net.port}${screen}`;
+
+function draw() {
+  document.getElementById('tabs').innerHTML = SCREENS.map(([p, l]) => `<button class="btn ${p === screen ? 'active' : ''}" data-p="${p}">${l}</button>`).join('');
+  document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { screen = b.dataset.p; draw(); });
+  document.getElementById('port').textContent = net.port;
+  if (!net.ips.length) {
+    document.getElementById('main').innerHTML = '<p>No se encontró una red. Conecta esta computadora al WiFi o a un cable de red y vuelve a abrir esta pantalla.</p>';
+    return;
+  }
+  const cur = net.ips[ipIdx], u = urlFor(cur.ip);
+  document.getElementById('main').innerHTML = `<div class="qr"><img alt="Código QR" src="/api/qr?text=${encodeURIComponent(u)}"></div>
+    <div><span class="muted">Escanea el QR o escribe esta dirección:</span>
+    <div class="url">${App.esc(u)}</div>
+    <button class="btn" id="copy">📋 Copiar dirección</button>
+    <p class="muted" style="margin-top:10px">IP de esta computadora: <b>${App.esc(cur.ip)}</b> <span style="opacity:.7">(${App.esc(cur.name)})</span></p></div>`;
+  document.getElementById('copy').onclick = async () => { try { await navigator.clipboard.writeText(u); App.toast('Dirección copiada', 'ok'); } catch { App.toast('No se pudo copiar', 'err'); } };
+
+  const alt = document.getElementById('alt');
+  alt.classList.toggle('hidden', net.ips.length < 2);
+  if (net.ips.length > 1) {
+    alt.innerHTML = `<b>Esta PC tiene varias redes.</b> <span class="muted">Si el QR no funciona, prueba con otra:</span>
+      <div class="tabs">${net.ips.map((n, i) => `<button class="btn sm ${i === ipIdx ? 'active' : ''}" data-i="${i}">${App.esc(n.ip)} · ${App.esc(n.name)}</button>`).join('')}</div>`;
+    alt.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { ipIdx = +b.dataset.i; draw(); });
+  }
+}
+
+App.topbar('Conectar dispositivos');
+App.connect();
+fetch('/api/network').then(r => r.json()).then(n => { net = n; draw(); });
+</script>
+</body></html>

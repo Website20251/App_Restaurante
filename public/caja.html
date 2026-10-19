@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f59e0b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Restaurante">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Caja</title><link rel="stylesheet" href="/style.css">
+<style>
+  .wrap { display: grid; grid-template-columns: 300px 1fr; gap: 16px; padding: 16px; max-width: 1100px; margin: 0 auto; }
+  .tl { display: flex; flex-direction: column; gap: 8px; }
+  .tl button { text-align: left; background: var(--panel); border: 2px solid var(--line); border-radius: 12px; padding: 12px; display: flex; justify-content: space-between; }
+  .tl button.sel { border-color: var(--accent); }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+  td { padding: 5px 0; border-bottom: 1px solid var(--line); } td:last-child { text-align: right; }
+  .sum div { display: flex; justify-content: space-between; padding: 3px 0; }
+  .sum .big { font-size: 24px; font-weight: 800; border-top: 2px solid var(--line); margin-top: 6px; padding-top: 8px; }
+  .methods { display: flex; gap: 8px; } .methods .btn.active { background: var(--accent); color: var(--accent-ink); }
+  #receipt { display: none; }
+  .ticket { background: #fff; color: #111; border: 1px dashed #999; border-radius: 8px; padding: 12px; font: 13px/1.45 ui-monospace, Consolas, monospace; max-height: 38vh; overflow: auto; }
+  .ticket hr { border: 0; border-top: 1px dashed #999; margin: 6px 0; } .ticket .r { display: flex; justify-content: space-between; gap: 10px; } .ticket .c { text-align: center; }
+  .rcact { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; } .rcact .wide { grid-column: 1 / -1; }
+  .methods { flex-wrap: wrap; }
+  .qrbox { display: flex; gap: 14px; align-items: center; margin-top: 12px; padding: 12px; border: 1px dashed var(--line); border-radius: 12px; }
+  .qrbox img { width: 160px; height: 160px; object-fit: contain; background: #fff; border-radius: 8px; cursor: zoom-in; flex: none; }
+  .qrbox .amt { font-size: 28px; font-weight: 800; }
+  @media (max-width: 480px) { .qrbox { flex-direction: column; text-align: center; } }
+  .recent button { width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; }
+  .recent button:hover { border-color: var(--accent); }
+  @media print {
+    .wrap { display: none; }
+    #receipt { display: block; font: 13px/1.4 monospace; width: 280px; color: #000; }
+    #receipt hr { border: 0; border-top: 1px dashed #000; } #receipt .r { display: flex; justify-content: space-between; }
+    #receipt .c { text-align: center; }
+  }
+  @media (max-width: 800px) { .wrap { grid-template-columns: 1fr; } }
+</style>
+</head><body>
+<div class="wrap" id="app"></div><div id="receipt"></div>
+<script src="/app.js"></script>
+<script>
+App.topbar('Caja', '<a class="btn sm hidden" id="toMesas" href="/mesero.html">← Mesas</a>');
+App.loadMe().then(u => { if (u.role === 'mesero') document.getElementById('toMesas').classList.remove('hidden'); });
+// Un mesero llega desde "Cobrar esta mesa" con ?mesa=N
+const S = { table: +new URLSearchParams(location.search).get('mesa') || null, method: 'efectivo', disc: 0, tip: 0, cash: '', op: '' };
+let recent = [];
+// Cobros de hoy: permiten reimprimir o reenviar un ticket. Se refresca con cada cambio.
+async function loadRecent() {
+  try {
+    const r = await App.api('GET', '/api/receipts');
+    if (JSON.stringify(r) !== JSON.stringify(recent)) { recent = r; render(); }
+  } catch {}
+}
+App.connect(() => { render(); loadRecent(); });
+
+function render() {
+  const s = App.state; if (!s) return;
+  if (document.activeElement?.tagName === 'INPUT') return; // no pisar lo que se está tecleando
+  const open = [];
+  for (let n = 1; n <= s.config.tables; n++) { const t = App.tableInfo(n); if (t.occupied) open.push([n, t]); }
+  if (S.table && !open.some(([n]) => n === S.table)) S.table = null;
+  const sel = S.table ? App.tableInfo(S.table) : null;
+  document.getElementById('app').innerHTML = `
+    <div><h3 style="margin-bottom:10px">Cuentas abiertas (${open.length})</h3><div class="tl">
+      ${open.map(([n, t]) => `<button data-t="${n}" class="${n === S.table ? 'sel' : ''}"><b>Mesa ${n}</b><span>${App.money(t.total)}</span></button>`).join('') || '<p class="muted">No hay cuentas pendientes.</p>'}
+    </div>
+    <div class="recent" style="margin-top:22px"><h3>Cobros de hoy</h3>
+      ${recent.map((x, i) => `<button data-rc="${i}"><span><b>Mesa ${x.table}</b> · ${App.hhmm(x.paidAt)}</span><span>${App.money(x.total)}</span></button>`).join('') || '<p class="muted" style="margin-top:6px">Aún no hay cobros hoy.</p>'}
+      <p class="muted" style="font-size:12px;margin-top:6px">Toca uno para reimprimir o enviar el ticket por WhatsApp.</p></div></div>
+    <div class="card">${sel ? bill(s, sel) : '<p class="muted">Selecciona una mesa para cobrar.</p>'}</div>`;
+  document.querySelectorAll('[data-rc]').forEach(b => b.onclick = () => showReceipt(recent[+b.dataset.rc]));
+  document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { S.table = +b.dataset.t; S.disc = 0; S.tip = 0; S.cash = ''; S.op = ''; render(); });
+  if (!sel) return;
+  const bind = (id, key, num = true) => { const e = document.getElementById(id); if (!e) return; e.oninput = () => { S[key] = num ? Math.max(0, +e.value || 0) : e.value; update(); }; };
+  bind('disc', 'disc'); bind('tip', 'tip'); bind('cash', 'cash', false); bind('op', 'op', false);
+  const qb = document.getElementById('qrBig'), qi = document.getElementById('qrimg');
+  if (qb) qb.onclick = qi.onclick = bigQr;
+  document.querySelectorAll('[data-pm]').forEach(b => b.onclick = () => { S.method = b.dataset.pm; render(); });
+  document.getElementById('pay').onclick = pay;
+  update();
+}
+
+function calc() {
+  const s = App.state, t = App.tableInfo(S.table);
+  const sub = t.total, discount = sub * Math.min(100, S.disc) / 100;
+  const tax = (sub - discount) * (s.config.taxPercent || 0) / 100;
+  return { sub, discount, tax, tip: S.tip, total: sub - discount + tax + S.tip };
+}
+function update() {
+  const c = calc();
+  document.getElementById('sum').innerHTML = `<div><span>Subtotal</span><span>${App.money(c.sub)}</span></div>
+    ${c.discount ? `<div><span>Descuento</span><span>−${App.money(c.discount)}</span></div>` : ''}
+    ${c.tax ? `<div><span>Impuesto (${App.state.config.taxPercent}%)</span><span>${App.money(c.tax)}</span></div>` : ''}
+    ${c.tip ? `<div><span>Propina</span><span>${App.money(c.tip)}</span></div>` : ''}
+    <div class="big"><span>TOTAL</span><span>${App.money(c.total)}</span></div>`;
+  const qa = document.getElementById('qrAmt'); if (qa) qa.textContent = App.money(c.total);
+  const ch = document.getElementById('change');
+  if (ch) ch.textContent = S.cash !== '' ? 'Vuelto: ' + App.money(Math.max(0, +S.cash - c.total)) : '';
+}
+
+// QR de Yape/Plin para que el cliente escanee, con el monto a pagar.
+function payQr(s) {
+  const k = S.method, info = (s.payInfo || {})[k] || {}, name = k === 'yape' ? 'Yape' : 'Plin';
+  if (!info.qr && !info.phone) return `<div class="qrbox"><p class="muted">No hay QR de ${name} configurado. ${App.me.role === 'admin' ? 'Súbelo en Administración → Ajustes.' : 'Pide al administrador que lo suba en Ajustes.'}</p></div>`;
+  return `<div class="qrbox">${info.qr ? `<img id="qrimg" alt="QR de ${name}" src="/api/pay-qr/${k}?v=${info.v}">` : ''}
+    <div><b>Paga con ${name}</b><div class="amt" id="qrAmt">${App.money(calc().total)}</div>
+    ${info.phone ? `<div>📱 ${App.esc(info.phone)}</div>` : ''}${info.holder ? `<div class="muted">${App.esc(info.holder)}</div>` : ''}
+    ${info.qr ? '<button class="btn sm" id="qrBig" style="margin-top:8px">🔍 Ampliar para el cliente</button>' : ''}</div></div>`;
+}
+function bigQr() {
+  const k = S.method, info = App.state.payInfo[k], bg = document.createElement('div');
+  bg.className = 'modal-bg';
+  bg.innerHTML = `<div class="modal" style="text-align:center;width:min(94vw,460px)"><h3>Paga con ${k === 'yape' ? 'Yape' : 'Plin'}</h3>
+    <img src="/api/pay-qr/${k}?v=${info.v}" style="width:100%;max-height:60vh;object-fit:contain;background:#fff;border-radius:10px">
+    <div style="font-size:30px;font-weight:800;margin-top:8px">${App.money(calc().total)}</div>
+    ${info.phone ? `<div>📱 ${App.esc(info.phone)}</div>` : ''}${info.holder ? `<div class="muted">${App.esc(info.holder)}</div>` : ''}
+    <div class="row" style="justify-content:center"><button class="btn primary">Cerrar</button></div></div>`;
+  bg.onclick = e => { if (e.target === bg || e.target.tagName === 'BUTTON') bg.remove(); };
+  document.body.append(bg);
+}
+
+function bill(s, t) {
+  const lines = t.orders.flatMap(o => o.items.map(i => ({ ...i, order: o })));
+  const pend = lines.filter(i => i.status !== 'entregado').length;
+  return `<h2>Mesa ${S.table}</h2>
+    ${pend ? `<p style="color:var(--warn);margin:6px 0">⚠ ${pend} producto(s) aún no entregados.</p>` : ''}
+    <table>${lines.map(i => `<tr><td>${i.qty}× ${App.esc(i.name)}</td><td>${App.money(i.price * i.qty)}</td></tr>`).join('')}</table>
+    <div class="row2">
+      ${App.me.role === 'mesero' ? '<div></div>' : `<div><label>Descuento %</label><input id="disc" type="number" min="0" max="100" value="${S.disc || ''}"></div>`}
+      <div><label>Propina ${App.esc(s.config.currency)}</label><input id="tip" type="number" min="0" step="0.5" value="${S.tip || ''}"></div></div>
+    <label>Método de pago</label>
+    <div class="methods">${['efectivo', 'yape', 'plin', 'tarjeta', 'transferencia'].map(m => `<button class="btn ${S.method === m ? 'active' : ''}" data-pm="${m}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>
+    ${S.method === 'efectivo' ? `<label>Recibido</label><input id="cash" type="number" min="0" value="${S.cash}"><p id="change" style="margin-top:6px;font-weight:700;color:var(--ok)"></p>` : '<input id="cash" class="hidden">'}
+    ${S.method === 'yape' || S.method === 'plin' ? payQr(s) : ''}
+    ${S.method !== 'efectivo' ? `<label>N° de operación (opcional)</label><input id="op" autocomplete="off" placeholder="para tu control" value="${App.esc(S.op)}">` : ''}
+    <div class="sum" id="sum" style="margin:14px 0"></div>
+    <button class="btn ok lg block" id="pay">Cobrar</button>`;
+}
+
+async function pay() {
+  const table = S.table, lines = App.tableInfo(table).orders.flatMap(o => o.items.map(i => ({ qty: i.qty, name: i.name, price: i.price })));
+  const cash = S.cash;
+  try {
+    const r = await App.api('POST', `/api/tables/${table}/pay`, { method: S.method, discountPercent: S.disc, tip: S.tip, opRef: S.method === 'efectivo' ? '' : S.op });
+    S.table = null; S.disc = 0; S.tip = 0; S.cash = ''; S.op = '';
+    App.toast(`Mesa ${table} cobrada: ${App.money(r.total)}`, 'ok');
+    showReceipt({
+      table, paidAt: Date.now(), lines, subtotal: r.subtotal, discount: r.discount, tax: r.tax, tip: r.tip,
+      total: r.total, method: r.method, cashier: App.me.name, cash: r.method === 'efectivo' && cash !== '' ? +cash : null,
+    });
+  } catch (e) { App.toast(e.message, 'err'); }
+}
+
+// ---------- Ticket: vista, impresión y WhatsApp ----------
+const when = ts => new Date(ts).toLocaleString([], { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+function receiptHtml(R) {
+  const cfg = App.state.config;
+  return `<div class="c"><b>${App.esc(cfg.name)}</b><br>${when(R.paidAt)}<br>Mesa ${R.table}</div><hr>
+    ${R.lines.map(i => `<div class="r"><span>${i.qty}× ${App.esc(i.name)}</span><span>${App.money(i.price * i.qty)}</span></div>`).join('')}<hr>
+    <div class="r"><span>Subtotal</span><span>${App.money(R.subtotal)}</span></div>
+    ${R.discount ? `<div class="r"><span>Descuento</span><span>−${App.money(R.discount)}</span></div>` : ''}
+    ${R.tax ? `<div class="r"><span>Impuesto</span><span>${App.money(R.tax)}</span></div>` : ''}
+    ${R.tip ? `<div class="r"><span>Propina</span><span>${App.money(R.tip)}</span></div>` : ''}
+    <div class="r"><b>TOTAL</b><b>${App.money(R.total)}</b></div>
+    <div class="r"><span>Pago</span><span>${R.method}</span></div>
+    ${R.cash != null ? `<div class="r"><span>Recibido / Vuelto</span><span>${App.money(R.cash)} / ${App.money(Math.max(0, R.cash - R.total))}</span></div>` : ''}
+    <hr><div class="c">¡Gracias por su visita!</div>`;
+}
+
+// Texto para WhatsApp (*negrita*) o para copiar.
+function receiptText(R) {
+  const cfg = App.state.config;
+  const L = [`*${cfg.name}*`, `${when(R.paidAt)} · Mesa ${R.table}`, '------------------------'];
+  for (const i of R.lines) L.push(`${i.qty}× ${i.name} — ${App.money(i.price * i.qty)}`);
+  L.push('------------------------', `Subtotal: ${App.money(R.subtotal)}`);
+  if (R.discount) L.push(`Descuento: −${App.money(R.discount)}`);
+  if (R.tax) L.push(`Impuesto: ${App.money(R.tax)}`);
+  if (R.tip) L.push(`Propina: ${App.money(R.tip)}`);
+  L.push(`*TOTAL: ${App.money(R.total)}*`, `Pago: ${R.method}`, '', '¡Gracias por su visita! 🍽️');
+  return L.join('\n');
+}
+
+// Número para wa.me: solo dígitos y con código de país. Si tiene hasta 10 dígitos se le antepone el código configurado.
+function waNumber(raw) {
+  let d = String(raw || '').replace(/\D/g, '').replace(/^00/, '');
+  if (!d) return '';
+  const cc = App.state.config.countryCode || '';
+  if (cc && d.length <= 10) d = cc + d.replace(/^0+/, '');
+  return d;
+}
+
+// ---------- Ticket en PDF (sin librerías): papel de 80 mm, letra monoespaciada ----------
+function makeTicketPdf(R) {
+  const cfg = App.state.config, COLS = 38;
+  const win1252 = s => String(s).replace(/[\u{1F000}-\u{1FFFF}☀-➿️]/gu, '').replace(/[^\x00-\xFF]/g, c => ({ '—': '\x97', '–': '\x96', '€': '\x80', '’': '\x92', '“': '\x93', '”': '\x94', '•': '\x95', '−': '-' }[c] || '?'));
+  const esc = s => s.replace(/([\\()])/g, '\\$1');
+  const lines = [];
+  const add = (t, bold = false) => lines.push({ t: win1252(t), bold });
+  const center = (s, bold) => { s = win1252(s); add(' '.repeat(Math.max(0, Math.floor((COLS - s.length) / 2))) + s, bold); };
+  const rule = () => add('-'.repeat(COLS));
+  const row = (l, r, bold = false) => {            // texto a la izquierda, importe a la derecha; parte los nombres largos
+    l = win1252(l); r = win1252(r);
+    const w = COLS - r.length - 1, parts = [];
+    while (l.length > w) { let cut = l.lastIndexOf(' ', w); if (cut < 6) cut = w; parts.push(l.slice(0, cut)); l = l.slice(cut).trimStart(); }
+    parts.push(l);
+    parts.forEach((p, i) => add(i === parts.length - 1 ? p.padEnd(COLS - r.length) + r : p, bold));
+  };
+  const money = n => App.money(n);
+
+  center(cfg.name, true);
+  center(when(R.paidAt)); center('Mesa ' + R.table);
+  rule();
+  R.lines.forEach(i => row(i.qty + 'x ' + i.name, money(i.price * i.qty)));
+  rule();
+  row('Subtotal', money(R.subtotal));
+  if (R.discount) row('Descuento', '-' + money(R.discount));
+  if (R.tax) row('Impuesto', money(R.tax));
+  if (R.tip) row('Propina', money(R.tip));
+  row('TOTAL', money(R.total), true);
+  row('Pago', R.method);
+  if (R.cash != null) row('Recibido / Vuelto', money(R.cash) + ' / ' + money(Math.max(0, R.cash - R.total)));
+  rule();
+  center('Gracias por su visita');
+
+  const FS = 8.5, LH = 12, MX = 14, MY = 18, PW = 226.77, PH = Math.max(120, MY * 2 + lines.length * LH);
+  const content = lines.map((l, i) => `BT /F${l.bold ? 2 : 1} ${FS} Tf ${MX} ${(PH - MY - (i + 1) * LH + 3).toFixed(2)} Td (${esc(l.t)}) Tj ET`).join('\n');
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PW} ${PH.toFixed(2)}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>`,
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>',
+  ];
+  let pdf = '%PDF-1.4\n'; const off = [];
+  objs.forEach((o, i) => { off.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + off.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
+  pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  const bytes = new Uint8Array(pdf.length);
+  for (let i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i) & 0xFF;   // todo es Latin-1: 1 carácter = 1 byte
+  return bytes;
+}
+const toBase64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); };
+const pdfName = R => `ticket-mesa${R.table}-${new Date(R.paidAt).toTimeString().slice(0, 5).replace(':', '')}`;
+
+function showReceipt(R) {
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg';
+  bg.innerHTML = `<div class="modal" style="width:min(94vw,460px)">
+    <h3>🧾 Ticket · Mesa ${R.table} · ${App.money(R.total)}</h3>
+    <div class="ticket" style="margin-top:8px">${receiptHtml(R)}</div>
+    <label>WhatsApp del cliente (opcional)</label>
+    <input id="rcPhone" type="tel" inputmode="tel" autocomplete="off" placeholder="ej. 987654321">
+    <p class="muted" style="font-size:12px;margin-top:4px">Si lo dejas vacío, WhatsApp te deja elegir el contacto.${App.state.config.countryCode ? '' : ' Tip: configura el código de país en Administración → Ajustes.'}</p>
+    <div class="rcact">
+      <button class="btn ok wide" id="rcPdfWa">📄 Enviar PDF por WhatsApp</button>
+      <button class="btn" id="rcWa">💬 Enviar como texto</button>
+      <button class="btn" id="rcPdf">⬇️ Guardar PDF</button>
+      <button class="btn" id="rcPrint">🖨️ Imprimir</button>
+      <button class="btn" id="rcCopy">📋 Copiar texto</button>
+      <button class="btn primary wide" id="rcClose">Listo</button>
+    </div>
+    <p class="muted" id="rcHelp" style="font-size:12px;margin-top:8px"></p></div>`;
+  document.body.append(bg);
+  const q = id => bg.querySelector('#' + id);
+  const help = t => { q('rcHelp').textContent = t; };
+  const phone = () => { const raw = q('rcPhone').value.trim(), num = waNumber(raw); if (raw && num.length < 8) { App.toast('El número parece incompleto', 'err'); return null; } return num; };
+  const download = (bytes, name) => {
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    const a = document.createElement('a'); a.href = url; a.download = name + '.pdf'; document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+  const close = () => { bg.remove(); render(); };
+  q('rcClose').onclick = close;
+  q('rcPrint').onclick = () => { document.getElementById('receipt').innerHTML = receiptHtml(R); setTimeout(() => window.print(), 100); };
+  q('rcWa').onclick = () => {
+    const num = phone(); if (num === null) return;
+    // wa.me abre WhatsApp (app o web) con el mensaje listo; solo falta tocar "Enviar".
+    window.open(`https://wa.me/${num}?text=${encodeURIComponent(receiptText(R))}`, '_blank');
+  };
+  q('rcCopy').onclick = async () => {
+    const text = receiptText(R);
+    try { await navigator.clipboard.writeText(text); }
+    catch { const ta = document.createElement('textarea'); ta.value = text; document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    App.toast('Ticket copiado', 'ok');
+  };
+  // Guardar PDF: en la app de escritorio lo guarda en Documentos\Restaurante\Tickets y lo muestra; en el navegador lo descarga.
+  q('rcPdf').onclick = async () => {
+    const bytes = makeTicketPdf(R), name = pdfName(R);
+    if (window.desktop) {
+      try { const r = await window.desktop.saveTicketPdf(toBase64(bytes), name, { reveal: true }); help('PDF guardado en: ' + r.path); }
+      catch (e) { App.toast('No se pudo guardar: ' + e.message, 'err'); }
+    } else { download(bytes, name); help('PDF descargado (revisa tu carpeta Descargas).'); }
+  };
+  // Enviar PDF por WhatsApp: WhatsApp no permite adjuntar archivos automáticamente, así que se deja a un paso.
+  q('rcPdfWa').onclick = async () => {
+    const num = phone(); if (num === null) return;
+    const bytes = makeTicketPdf(R), name = pdfName(R);
+    const hello = `Hola, le comparto el ticket de su consumo en ${App.state.config.name}. ¡Gracias por su visita!`;
+    const chat = () => window.open(`https://wa.me/${num}?text=${encodeURIComponent(hello)}`, '_blank');
+    try {
+      // 1) App de escritorio: guarda el PDF y lo deja copiado; en el chat solo hay que pegar (Ctrl+V) y enviar.
+      if (window.desktop) {
+        const r = await window.desktop.saveTicketPdf(toBase64(bytes), name, { copy: true });
+        chat();
+        help(r.copied ? '✅ PDF copiado. En el chat de WhatsApp presiona Ctrl+V y luego Enviar.' : 'PDF guardado en: ' + r.path + ' — arrástralo al chat de WhatsApp.');
+        App.toast(r.copied ? 'PDF copiado: pégalo en el chat (Ctrl+V)' : 'PDF guardado', 'ok');
+        return;
+      }
+      // 2) Celular/tablet: menú "Compartir" (elige WhatsApp y el contacto; envía el PDF directamente).
+      const file = new File([bytes], name + '.pdf', { type: 'application/pdf' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], text: hello }); return; }
+        catch (e) { if (e.name === 'AbortError') return; }
+      }
+      // 3) Respaldo: se descarga el PDF y se abre el chat para adjuntarlo con 📎.
+      download(bytes, name); chat();
+      help('PDF descargado. En el chat de WhatsApp toca 📎 → Documento y elige el archivo "' + name + '.pdf".');
+    } catch (e) { App.toast('No se pudo preparar el PDF: ' + e.message, 'err'); }
+  };
+}
+</script>
+</body></html>

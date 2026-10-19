@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f59e0b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Restaurante">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Mesero</title><link rel="stylesheet" href="/style.css">
+<style>
+  .wrap { padding: 16px; max-width: 1200px; margin: 0 auto; }
+  .tables { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; margin-top: 14px; }
+  .tbl { background: var(--panel); border: 2px solid var(--line); border-radius: 14px; padding: 16px 10px; text-align: center; min-height: 104px; }
+  .tbl b { font-size: 22px; display: block; }
+  .tbl.occ { border-color: var(--warn); }
+  .tbl.rdy { border-color: var(--ok); background: #dcfce7; animation: pulse 1.4s infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 6px #16a34a33; } }
+  .legend { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; border: 2px solid var(--line); }
+
+  .order { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
+  .cats { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; }
+  .cats .btn { white-space: nowrap; } .cats .btn.active { background: var(--accent); color: var(--accent-ink); }
+  .items { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-top: 10px; }
+  .item { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; text-align: left; min-height: 82px; display: flex; flex-direction: column; justify-content: space-between; }
+  .item:hover { border-color: var(--accent); }
+  .item.off { opacity: .4; pointer-events: none; }
+  .item .p { color: var(--accent); font-weight: 700; }
+  .side { position: sticky; top: 64px; display: flex; flex-direction: column; gap: 12px; max-height: calc(100vh - 80px); overflow: auto; }
+  .line { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .line .nm { flex: 1; min-width: 0; } .line small { display: block; color: var(--muted); }
+  .qty { display: flex; align-items: center; gap: 6px; }
+  .qty button { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel2); font-weight: 700; }
+  .sent { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .sent .hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 13px; }
+  .sent li { list-style: none; display: flex; justify-content: space-between; gap: 6px; font-size: 14px; padding: 2px 0; }
+  .tot { display: flex; justify-content: space-between; font-size: 18px; font-weight: 700; margin-top: 10px; }
+  @media (max-width: 860px) { .order { grid-template-columns: 1fr; } .side { position: static; max-height: none; } }
+
+  #alerts { position: fixed; inset: 0; background: #000b; z-index: 200; display: none; align-items: center; justify-content: center; padding: 16px; }
+  #alerts.on { display: flex; }
+  .alert-box { background: var(--panel); border: 3px solid var(--ok); border-radius: 18px; width: min(96vw, 460px); max-height: 90vh; overflow: auto; padding: 22px; text-align: center; animation: shake .6s infinite; }
+  @keyframes shake { 0%,100% { transform: none; } 20% { transform: rotate(-1.2deg); } 60% { transform: rotate(1.2deg); } }
+  .alert-box .bell { font-size: 54px; }
+  .alert-box h2 { margin: 6px 0 14px; }
+  .alert-item { background: var(--panel2); border-radius: 12px; padding: 12px; margin-top: 10px; }
+  .alert-item b { font-size: 26px; display: block; }
+</style>
+</head><body>
+<div class="wrap" id="app"></div><div id="alerts"></div>
+<script src="/app.js"></script>
+<script>
+const S = { waiter: '', carts: {}, table: null, cat: null, search: '', cart: [] };
+App.topbar('Mesero');
+// El navegador pide permiso de notificaciones solo tras un toque del usuario.
+document.addEventListener('pointerdown', () => { try { window.Notification && Notification.permission === 'default' && Notification.requestPermission(); } catch {} }, { once: true });
+const $app = document.getElementById('app');
+
+App.connect((s, prev) => {
+  S.waiter = App.me.name;
+  if (prev) notifyReady(s, prev);
+  syncAlerts(s);
+  drawAlerts();
+  render();
+});
+
+// ---- Alertas de pedido listo ----
+// Cada alerta queda en pantalla, con sonido y vibración repetidos, hasta que el mesero la confirma.
+const alerts = new Map(); // "pedido|estación" -> { table, num, station }
+const baseTitle = document.title;
+// Los navegadores bloquean el sonido hasta el primer toque: lo desbloqueamos con cualquier toque.
+document.addEventListener("pointerdown", () => { try { (App._ac ||= new (window.AudioContext || window.webkitAudioContext)()).resume(); } catch {} });
+
+function notifyReady(s, prev) {
+  const before = new Map(prev.orders.flatMap(o => o.items.map(i => [i.id, i.status])));
+  for (const o of s.orders) {
+    if (o.waiter !== S.waiter || o.cancelled || o.paid) continue;
+    for (const i of o.items) {
+      const was = before.get(i.id);
+      if (i.status === "listo" && was && was !== "listo") {
+        const key = o.id + "|" + i.station;
+        if (!alerts.has(key)) { alerts.set(key, { table: o.table, num: o.num, station: i.station }); ring(o.table, i.station); }
+      }
+    }
+  }
+}
+// Si ya se entregó o canceló, la alerta se quita sola.
+function syncAlerts(s) {
+  for (const [k, a] of alerts) {
+    const o = s.orders.find(x => x.id === k.split("|")[0]);
+    if (!o || o.cancelled || o.paid || !o.items.some(i => i.station === a.station && i.status === "listo")) alerts.delete(k);
+  }
+}
+function ring(table, station) {
+  App.beep("ready");
+  try { navigator.vibrate && navigator.vibrate([400, 150, 400, 150, 400]); } catch {}
+  try { // notificación del sistema (funciona en la app de escritorio; en celulares solo con HTTPS)
+    if (window.Notification && Notification.permission === "granted")
+      new Notification("Mesa " + table + " lista", { body: App.state.config.mergeBar ? "Pedido listo para recoger" : station === "barra" ? "Bebidas listas para recoger" : "Platos listos para recoger", requireInteraction: true });
+  } catch {}
+}
+function drawAlerts() {
+  const box = document.getElementById("alerts");
+  const list = [...alerts.entries()];
+  box.classList.toggle("on", list.length > 0);
+  if (!list.length) { box.innerHTML = ""; document.title = baseTitle; return; }
+  box.innerHTML = `<div class="alert-box"><div class="bell">🔔</div><h2>¡Pedido listo para recoger!</h2>
+    ${list.map(([k, a]) => `<div class="alert-item"><b>Mesa ${a.table}</b><span class="muted">${App.state.config.mergeBar ? "🍽️ Pedido completo" : a.station === "barra" ? "🍹 Bebidas" : "🍳 Platos"} · pedido #${a.num}</span>
+      <button class="btn ok lg block" data-ack="${k}" style="margin-top:10px">✔ Voy a recogerlo</button></div>`).join("")}</div>`;
+  box.querySelectorAll("[data-ack]").forEach(b => b.onclick = () => { alerts.delete(b.dataset.ack); drawAlerts(); });
+}
+// Mientras haya alertas sin confirmar: repite sonido/vibración y parpadea el título de la pestaña.
+let flash = false;
+setInterval(() => {
+  if (!alerts.size) return;
+  App.beep("ready");
+  try { navigator.vibrate && navigator.vibrate([300, 120, 300]); } catch {}
+}, 5000);
+setInterval(() => { if (alerts.size) { flash = !flash; document.title = flash ? "🔔 ¡PEDIDO LISTO!" : baseTitle; } }, 900);
+
+function render() {
+  const s = App.state; if (!s) return;
+  S.waiter = App.me.name; // el mesero es quien inició sesión
+  S.table ? renderOrder(s) : renderTables(s);
+}
+
+// Navegación: abrir una mesa agrega un paso al historial, así el botón "atrás" del celular/tablet vuelve a las mesas.
+// Cada mesa conserva su pedido sin enviar mientras se navega.
+function openTable(n) {
+  S.table = n; S.cart = (S.carts[n] ||= []); S.cat = null; S.search = '';
+  history.pushState({ table: n }, '');
+  render(); window.scrollTo(0, 0);
+}
+function goTables() {
+  if (history.state && history.state.table) history.back(); // dispara popstate
+  else { S.table = null; S.search = ''; render(); }
+}
+window.addEventListener('popstate', e => {
+  const n = e.state && e.state.table;
+  S.table = n || null; S.search = '';
+  if (n) S.cart = (S.carts[n] ||= []);
+  render(); window.scrollTo(0, 0);
+});
+
+function renderTables(s) {
+  let h = `<h2>Mesas</h2>
+    <div class="legend"><span><i></i>Libre</span><span><i style="border-color:var(--warn)"></i>Ocupada</span><span><i style="border-color:var(--ok)"></i>Pedido listo</span></div>
+    <div class="tables">`;
+  for (let n = 1; n <= s.config.tables; n++) {
+    const t = App.tableInfo(n);
+    const cls = t.ready ? 'rdy' : t.occupied ? 'occ' : '';
+    h += `<button class="tbl ${cls}" data-t="${n}"><b>Mesa ${n}</b>
+      <span class="muted">${t.ready ? '🔔 ¡Recoger!' : t.occupied ? App.money(t.total) : 'Libre'}</span></button>`;
+  }
+  $app.innerHTML = h + '</div>';
+  $app.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { openTable(+b.dataset.t); });
+}
+
+const STATION_ICON = { cocina: '🍳', barra: '🍹', directo: '🧊' };
+const isDirect = (s, id) => s.menu.find(x => x.id === id)?.station === 'directo';
+const cartQty = id => S.cart.filter(l => l.itemId === id).reduce((a, l) => a + l.qty, 0);
+
+function renderOrder(s) {
+  // Conserva foco/valor del buscador entre renders en vivo.
+  const focused = document.activeElement?.id === 'q';
+  const cat = S.cat || s.categories[0]?.id;
+  const q = S.search.toLowerCase();
+  const list = s.menu.filter(m => q ? m.name.toLowerCase().includes(q) : m.category === cat);
+  const t = App.tableInfo(S.table);
+  const cartTotal = S.cart.reduce((a, l) => a + l.price * l.qty, 0);
+
+  $app.innerHTML = `<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
+      <button class="btn" id="back">← Mesas</button><h2>Mesa ${S.table}</h2></div>
+    <div class="order"><div>
+      <input id="q" placeholder="🔎 Buscar producto…" value="${App.esc(S.search)}" style="margin-bottom:10px">
+      <div class="cats">${s.categories.map(c => `<button class="btn ${!q && c.id === cat ? 'active' : ''}" data-c="${c.id}">${App.esc(c.name)}</button>`).join('')}</div>
+      <div class="items">${list.map(m => `<button class="item ${m.available ? '' : 'off'}" data-m="${m.id}">
+        <span>${App.esc(m.name)}</span>
+        <span>${m.available ? `<span class="p">${App.money(m.price)}</span> <small class="muted">${STATION_ICON[m.station] || ''}</small>${m.stock != null ? ` <small style="color:${m.stock <= 5 ? 'var(--danger)' : 'var(--muted)'}">quedan ${m.stock}</small>` : ''}` : '<span class="badge agotado">Agotado</span>'}</span></button>`).join('') || '<p class="muted">Sin resultados</p>'}</div>
+    </div>
+    <div class="side">
+      <div class="card"><h3>Nuevo pedido</h3>
+        ${S.cart.length ? S.cart.map((l, i) => `<div class="line"><div class="nm">${App.esc(l.name)}<small>${App.money(l.price)}${l.note ? ' · 📝 ' + App.esc(l.note) : ''}${isDirect(s, l.itemId) ? ' · 🧊 lo tomas tú' : ''}</small></div>
+          <button class="btn sm" data-note="${i}" title="Nota">📝</button>
+          <div class="qty"><button data-dec="${i}">−</button><b>${l.qty}</b><button data-inc="${i}">+</button></div></div>`).join('')
+          : '<p class="muted" style="margin:8px 0">Toca productos para agregarlos.</p>'}
+        <div class="tot"><span>Total</span><span>${App.money(cartTotal)}</span></div>
+        <button class="btn primary lg block" id="send" style="margin-top:12px" ${S.cart.length ? '' : 'disabled'}>${S.cart.length && S.cart.every(l => isDirect(s, l.itemId)) ? 'Registrar bebidas 🧊' : 'Enviar a cocina 🚀'}</button>
+      </div>
+      <div class="card"><h3>Cuenta de la mesa</h3>
+        ${t.orders.length ? t.orders.map(o => `<div class="sent"><div class="hd"><span><b>#${o.num}</b> · ${App.hhmm(o.createdAt)} · ${App.esc(o.waiter)}</span>
+          <span>${o.items.some(i => i.status === 'listo') ? `<button class="btn ok sm" data-del="${o.id}">Entregar</button>` : ''}
+          <button class="btn danger sm" data-cx="${o.id}">✕</button></span></div>
+          <ul>${o.items.map(i => `<li><span>${i.qty}× ${App.esc(i.name)}${i.note ? ` <small class="muted">(${App.esc(i.note)})</small>` : ''}</span>${i.station === 'directo' ? `<span class="badge entregado">🧊 tomado${i.takenBy ? ' por ' + App.esc(i.takenBy) : ''}</span>` : `<span class="badge ${i.status}">${i.status}</span>`}</li>`).join('')}</ul></div>`).join('')
+          : '<p class="muted" style="margin:8px 0">Aún sin pedidos.</p>'}
+        <div class="tot"><span>Consumo</span><span>${App.money(t.total)}</span></div>
+        ${App.state.config.waiterCharges
+          ? (t.orders.length ? `<a class="btn ok lg block" style="margin-top:10px" href="/caja.html?mesa=${S.table}">💵 Cobrar esta mesa</a>` : '')
+          : '<p class="muted" style="font-size:12px;margin-top:6px">El cobro se realiza en Caja.</p>'}
+      </div>
+    </div></div>`;
+
+  const $ = sel => $app.querySelectorAll(sel);
+  document.getElementById('back').onclick = goTables;
+  const qi = document.getElementById('q');
+  qi.oninput = () => { S.search = qi.value; render(); };
+  if (focused) { qi.focus(); qi.setSelectionRange(qi.value.length, qi.value.length); }
+  $('[data-c]').forEach(b => b.onclick = () => { S.cat = b.dataset.c; S.search = ''; render(); });
+  $('[data-m]').forEach(b => b.onclick = () => {
+    const m = s.menu.find(x => x.id === b.dataset.m);
+    if (m.stock != null && cartQty(m.id) >= m.stock) return App.toast(`Solo quedan ${m.stock} de ${m.name}`, 'err');
+    const ex = S.cart.find(l => l.itemId === m.id && !l.note);
+    ex ? ex.qty++ : S.cart.push({ itemId: m.id, name: m.name, price: m.price, qty: 1, note: '' });
+    render();
+  });
+  $('[data-inc]').forEach(b => b.onclick = () => {
+    const l = S.cart[+b.dataset.inc], m = s.menu.find(x => x.id === l.itemId);
+    if (m && m.stock != null && cartQty(m.id) >= m.stock) return App.toast(`Solo quedan ${m.stock} de ${m.name}`, 'err');
+    l.qty++; render();
+  });
+  $('[data-dec]').forEach(b => b.onclick = () => { const l = S.cart[+b.dataset.dec]; if (--l.qty <= 0) S.cart.splice(+b.dataset.dec, 1); render(); });
+  $('[data-note]').forEach(b => b.onclick = async () => {
+    const l = S.cart[+b.dataset.note];
+    const v = await App.ask({ title: 'Nota para ' + l.name, label: 'Indicaciones para la cocina', placeholder: 'ej. sin cebolla, término medio', value: l.note, multiline: true, okLabel: 'Guardar' });
+    if (v !== null) { l.note = v.trim(); render(); }
+  });
+  document.getElementById('send').onclick = async e => {
+    e.target.disabled = true;
+    try {
+      await App.api('POST', '/api/orders', { table: S.table, items: S.cart.map(l => ({ itemId: l.itemId, qty: l.qty, note: l.note })) });
+      const take = S.cart.filter(l => isDirect(s, l.itemId)).map(l => l.qty + '× ' + l.name);
+      const sendKitchen = S.cart.some(l => !isDirect(s, l.itemId));
+      S.cart.length = 0;
+      App.toast(sendKitchen ? 'Pedido enviado a cocina ✔' : 'Bebidas registradas ✔', 'ok');
+      if (take.length) App.toast('🧊 Toma tú: ' + take.join(', '), 'alert');
+      goTables(); // ya enviado: vuelve a las mesas
+    } catch (err) { App.toast(err.message, 'err'); e.target.disabled = false; }
+  };
+  $('[data-del]').forEach(b => b.onclick = async () => { try { await App.api('POST', `/api/orders/${b.dataset.del}/deliver`); App.toast('Marcado como entregado', 'ok'); } catch (e) { App.toast(e.message, 'err'); } });
+  $('[data-cx]').forEach(b => b.onclick = async () => {
+    if (!await App.confirm('¿Cancelar este pedido?', 'Si no es tuyo o ya está en preparación, necesitará la autorización de un administrador.', 'Sí, cancelar')) return;
+    const o = s.orders.find(x => x.id === b.dataset.cx);
+    const cancel = approverPassword => App.api('POST', `/api/orders/${o.id}/cancel`, { approverPassword });
+    try {
+      try { await cancel(); }
+      catch (e) {
+        if (e.status !== 403) throw e;
+        const pw = await App.askApproval('Este pedido ya está en preparación o es de otro mesero. Pide a un administrador que escriba su contraseña.');
+        if (!pw) return;
+        await cancel(pw);
+      }
+      App.toast('Pedido cancelado', 'ok');
+    } catch (e) { App.toast(e.message, 'err'); }
+  });
+}
+history.replaceState(null, ''); // al recargar la página se empieza en las mesas
+render();
+</script>
+</body></html>

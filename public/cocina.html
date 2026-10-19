@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f59e0b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Restaurante">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Cocina</title><link rel="stylesheet" href="/style.css">
+<style>
+  .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding: 14px; align-items: start; min-height: calc(100vh - 56px); }
+  .col h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; display: flex; justify-content: space-between; }
+  .col .list { display: flex; flex-direction: column; gap: 12px; }
+  .tk { background: var(--panel); border: 1px solid var(--line); border-top: 6px solid var(--ok); border-radius: 12px; overflow: hidden; }
+  .tk.warn { border-top-color: var(--warn); } .tk.late { border-top-color: var(--danger); animation: blink 1.2s infinite; }
+  .tk.fresh { animation: flash 1.5s 2; }
+  @keyframes blink { 50% { box-shadow: 0 0 0 3px #dc262655; } }
+  @keyframes flash { 50% { background: #fef3c7; } }
+  .tk .hd { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 12px 4px; }
+  .tk .hd b { font-size: 20px; } .tk .timer { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 18px; }
+  .tk .meta { padding: 0 12px 6px; color: var(--muted); font-size: 12px; }
+  .tk ul { list-style: none; padding: 4px 12px 10px; }
+  .tk li { padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 17px; }
+  .tk li:last-child { border: 0; }
+  .tk li .q { display: inline-block; min-width: 30px; font-weight: 800; color: var(--accent); }
+  .tk li .n { display: block; margin-left: 30px; font-size: 14px; color: var(--warn); font-weight: 600; }
+  .tk .act { padding: 0 12px 12px; }
+  .empty { color: var(--muted); text-align: center; padding: 30px 0; border: 1px dashed var(--line); border-radius: 12px; }
+  .stock { padding: 0 14px 18px; }
+  .stock .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .chip { border: 1px solid var(--line); background: var(--panel); border-radius: 99px; padding: 6px 12px; font-size: 13px; }
+  .chip.off { border-color: var(--danger); color: var(--danger); text-decoration: line-through; }
+  @media (max-width: 900px) { .board { grid-template-columns: 1fr; } }
+</style>
+</head><body>
+<div class="board" id="board"></div>
+<div class="stock card" style="margin:0 14px 14px">
+  <b>Disponibilidad</b> <span class="muted">· toca un producto para marcarlo agotado/disponible (los meseros lo ven al instante)</span>
+  <div class="chips" id="chips"></div>
+</div>
+<script src="/app.js"></script>
+<script>
+const station = new URLSearchParams(location.search).get('e') === 'barra' ? 'barra' : 'cocina';
+const LABEL = station === 'barra' ? 'Barra' : 'Cocina';
+App.topbar(LABEL, `<span id="swap"></span>
+  <button class="btn sm" id="snd">🔔 Activar sonido</button>`);
+App.loadMe().then(u => { if (u.role === 'admin') document.getElementById('swap').innerHTML = `<a class="btn sm" href="/cocina.html?e=${station === 'barra' ? 'cocina' : 'barra'}">Ir a ${station === 'barra' ? 'Cocina' : 'Barra'}</a>`; });
+document.getElementById('snd').onclick = e => { App.beep('new'); e.target.textContent = '🔔 Sonido activo'; };
+
+const known = new Set();
+let first = true;
+const fresh = new Set();
+
+// Ítems de esta estación que siguen vivos en el pedido.
+const mine = o => o.items.filter(i => i.station === station && i.status !== 'entregado');
+function stationStatus(items) {
+  if (items.every(i => i.status === 'listo')) return 'listo';
+  if (items.some(i => i.status === 'preparando' || i.status === 'listo')) return 'preparando';
+  return 'pendiente';
+}
+
+App.connect(s => {
+  const orders = s.orders.filter(o => !o.cancelled && !o.paid && mine(o).length)
+    .sort((a, b) => a.createdAt - b.createdAt);
+  let newOnes = 0;
+  for (const o of orders) if (!known.has(o.id)) { known.add(o.id); if (!first) { newOnes++; fresh.add(o.id); } }
+  if (newOnes) { App.beep('new'); App.toast(`🆕 ${newOnes} comanda(s) nueva(s)`, 'alert'); }
+  first = false;
+  if (s.config.mergeBar && station === 'barra' && !orders.length) { // todo llega a la pantalla de Cocina
+    document.getElementById('board').innerHTML = '<div class="card" style="grid-column:1/-1;text-align:center;padding:40px"><h2>🍽️ Cocina y barra están juntas</h2><p class="muted" style="margin-top:8px">Los pedidos con bebidas llegan completos a la pantalla de <b>Cocina</b>.</p><a class="btn primary" style="margin-top:16px" href="/cocina.html?e=cocina">Ir a Cocina</a></div>';
+    renderStock(s); return;
+  }
+  renderBoard(orders);
+  renderStock(s);
+});
+
+function renderBoard(orders) {
+  const cols = { pendiente: [], preparando: [], listo: [] };
+  orders.forEach(o => cols[stationStatus(mine(o))].push(o));
+  const titles = { pendiente: '🆕 Nuevos', preparando: '🔥 En preparación', listo: '✅ Listos para entregar' };
+  document.getElementById('board').innerHTML = Object.keys(cols).map(k => `
+    <div class="col"><h2><span>${titles[k]}</span><span>${cols[k].length}</span></h2>
+    <div class="list">${cols[k].map(o => ticket(o, k)).join('') || '<div class="empty">Sin comandas</div>'}</div></div>`).join('');
+  document.querySelectorAll('[data-go]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await App.api('POST', `/api/orders/${b.dataset.id}/station`, { station, status: b.dataset.go }); fresh.delete(b.dataset.id); }
+    catch (e) { App.toast(e.message, 'err'); b.disabled = false; }
+  });
+  tick();
+}
+
+function ticket(o, st) {
+  const items = mine(o);
+  const next = { pendiente: ['preparando', '🔥 Empezar', 'primary'], preparando: ['listo', '✔ Marcar listo', 'ok'], listo: null }[st];
+  return `<div class="tk ${fresh.has(o.id) ? 'fresh' : ''}" data-since="${o.createdAt}" data-st="${st}">
+    <div class="hd"><b>Mesa ${o.table} <span class="muted" style="font-size:13px">#${o.num}</span></b><span class="timer">00:00</span></div>
+    <div class="meta">${App.esc(o.waiter)} · ${App.hhmm(o.createdAt)}</div>
+    <ul>${items.map(i => `<li><span class="q">${i.qty}×</span>${i.kind === 'barra' ? '🍹 ' : ''}${App.esc(i.name)}${i.note ? `<span class="n">⚠ ${App.esc(i.note)}</span>` : ''}</li>`).join('')}</ul>
+    <div class="act">${next ? `<button class="btn ${next[2]} lg block" data-id="${o.id}" data-go="${next[0]}">${next[1]}</button>`
+      : `<button class="btn lg block" data-id="${o.id}" data-go="preparando">↩ Regresar a preparación</button>`}</div></div>`;
+}
+
+// Cronómetros: verde < 10 min, amarillo < 20, rojo después. Los tickets listos no se alertan.
+function tick() {
+  document.querySelectorAll('.tk').forEach(el => {
+    const ms = App.nowMs() - +el.dataset.since;
+    el.querySelector('.timer').textContent = App.mmss(ms);
+    const min = ms / 60000, done = el.dataset.st === 'listo';
+    el.classList.toggle('warn', !done && min >= 10 && min < 20);
+    el.classList.toggle('late', !done && min >= 20);
+  });
+}
+setInterval(tick, 1000);
+
+function renderStock(s) {
+  const merged = s.config.mergeBar;
+  // Con cocina y barra juntas, la cocina también controla la disponibilidad de las bebidas de barra.
+  document.getElementById('chips').innerHTML = s.menu.filter(m => m.station === station || (merged && station === 'cocina' && m.station === 'barra'))
+    .map(m => `<button class="chip ${m.available ? '' : 'off'}" data-m="${m.id}" data-av="${m.available}">${App.esc(m.name)}</button>`).join('');
+  document.querySelectorAll('[data-m]').forEach(b => b.onclick = async () => {
+    try { await App.api('PATCH', `/api/menu/${b.dataset.m}`, { available: b.dataset.av !== 'true' }); }
+    catch (e) { App.toast(e.message, 'err'); }
+  });
+}
+</script>
+</body></html>

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f59e0b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Restaurante">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Iniciar sesión</title><link rel="stylesheet" href="/style.css">
+<style>
+  .login { max-width: 460px; margin: 0 auto; padding: 36px 16px; }
+  .login h1 { font-size: 26px; text-align: center; }
+  .login .sub { text-align: center; margin: 4px 0 22px; }
+  .users { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+  .users button { background: var(--panel); border: 2px solid var(--line); border-radius: 14px; padding: 16px 8px; text-align: center; }
+  .users button:hover { border-color: var(--accent); }
+  .users b { display: block; font-size: 17px; } .users small { color: var(--muted); }
+  .av { width: 46px; height: 46px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-weight: 800; font-size: 20px; display: flex; align-items: center; justify-content: center; margin: 0 auto 8px; }
+  #err { color: var(--danger); min-height: 22px; margin-top: 8px; text-align: center; }
+</style>
+</head><body>
+<div class="login">
+  <h1>🍽️ <span id="rname">Restaurante</span></h1>
+  <p class="muted sub" id="sub">¿Quién eres?</p>
+  <div id="pick" class="users"></div>
+  <div id="pw" class="card hidden">
+    <div class="av" id="av"></div>
+    <h2 id="who" style="text-align:center"></h2>
+    <label>Contraseña</label>
+    <input id="pass" type="password" autocomplete="current-password" autofocus>
+    <p id="err"></p>
+    <button class="btn primary lg block" id="go">Entrar</button>
+    <button class="btn block" id="back" style="margin-top:8px">← Cambiar de usuario</button>
+  </div>
+</div>
+<script>
+const ROLES = { admin: 'Administrador', mesero: 'Mesero', cocina: 'Cocina', barra: 'Barra', caja: 'Caja' };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const $ = id => document.getElementById(id);
+let chosen = null;
+
+fetch('/api/me').then(async r => { if (r.ok) { const u = await r.json(); location.href = u.home; } });
+
+fetch('/api/login-users').then(r => r.json()).then(users => {
+  $('pick').innerHTML = users.map(u => `<button data-id="${u.id}"><div class="av">${esc(u.name[0].toUpperCase())}</div><b>${esc(u.name)}</b><small>${ROLES[u.role]}</small></button>`).join('')
+    || '<p class="muted">No hay usuarios.</p>';
+  $('pick').querySelectorAll('button').forEach(b => b.onclick = () => {
+    chosen = users.find(u => u.id === b.dataset.id);
+    $('pick').classList.add('hidden'); $('sub').classList.add('hidden'); $('pw').classList.remove('hidden');
+    $('av').textContent = chosen.name[0].toUpperCase(); $('who').textContent = chosen.name;
+    $('pass').value = ''; $('err').textContent = ''; $('pass').focus();
+  });
+});
+
+async function go() {
+  $('err').textContent = ''; $('go').disabled = true;
+  try {
+    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: chosen.id, password: $('pass').value }) });
+    const d = await r.json();
+    if (!r.ok) { $('err').textContent = d.error || 'Error'; $('pass').select(); }
+    else location.href = d.home;
+  } catch { $('err').textContent = 'No hay conexión con el servidor'; }
+  $('go').disabled = false;
+}
+$('go').onclick = go;
+$('pass').onkeydown = e => { if (e.key === 'Enter') go(); };
+$('back').onclick = () => { $('pw').classList.add('hidden'); $('pick').classList.remove('hidden'); $('sub').classList.remove('hidden'); };
+</script>
+</body></html>

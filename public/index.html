@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f59e0b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Restaurante">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Restaurante</title><link rel="stylesheet" href="/style.css">
+</head><body>
+<div class="portal">
+  <h1>🍽️ <span id="rname">Restaurante</span></h1>
+  <p class="muted">Selecciona tu estación de trabajo <span id="me"></span></p>
+  <div class="grid">
+    <a class="tile" href="/mesero.html"><div class="ic">📝</div><h3>Mesero</h3><p class="muted">Tomar pedidos y entregar platos</p></a>
+    <a class="tile" href="/cocina.html?e=cocina"><div class="ic">👨‍🍳</div><h3>Cocina</h3><p class="muted">Pantalla de comandas</p></a>
+    <a class="tile" href="/cocina.html?e=barra"><div class="ic">🍹</div><h3>Barra</h3><p class="muted">Bebidas y tragos</p></a>
+    <a class="tile" href="/caja.html"><div class="ic">💵</div><h3>Caja</h3><p class="muted">Cuentas, cobro y ticket 🔒</p></a>
+    <a class="tile" href="/admin.html"><div class="ic">📊</div><h3>Administración</h3><p class="muted">Menú, reportes, ajustes 🔒</p></a>
+    <a class="tile" href="/conectar.html"><div class="ic">📱</div><h3>Conectar celulares</h3><p class="muted">IP y código QR para meseros</p></a>
+  </div>
+</div>
+<script src="/app.js"></script>
+<script>
+App.topbar('Inicio');
+App.connect(s => document.getElementById('rname').textContent = s.config.name);
+</script>
+</body></html>
