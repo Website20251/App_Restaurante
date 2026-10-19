@@ -406,17 +406,19 @@ function report(from, to = Infinity) {
 function reportCsv(from, to) {
   const groups = new Map();
   for (const o of allOrders(from, to)) if (o.paid && o.paidAt >= from && o.paidAt < to) (groups.get(o.paidRef) || groups.set(o.paidRef, []).get(o.paidRef)).push(o);
-  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  // Separador ";" (el que espera Excel en español); los números van sin comillas para que Excel los lea como números.
+  const q = v => typeof v === 'number' ? String(v) : '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const rows = [['Fecha', 'Hora', 'Mesa', 'Mesero', 'Cajero', 'Productos', 'Subtotal', 'Descuento', 'Motivo descuento', 'Autorizó', 'Impuesto', 'Propina', 'Total', 'Método', 'Detalle pago', 'N° operación']];
   for (const os of [...groups.values()].sort((a, b) => a[0].paidAt - b[0].paidAt)) {
     const f = os.find(o => o.bill) || os[0], b = f.bill || {}, d = new Date(os[0].paidAt);
-    const lines = os.flatMap(o => o.items.map(i => `${i.qty}x ${i.name}`)).join('; ');
+    const lines = os.flatMap(o => o.items.map(i => `${i.qty}x ${i.name}`)).join(' | ');
     const subtotal = b.subtotal ?? round2(os.reduce((s, o) => s + o.items.reduce((a, i) => a + i.price * i.qty, 0), 0));
     rows.push([ymd(d), d.toTimeString().slice(0, 5), os[0].table, os[0].waiter, os[0].cashier || '', lines, subtotal, b.discount || 0, b.discountReason || '', b.approvedBy || '', b.tax || 0,
       round2(os.reduce((s, o) => s + (o.tip || 0), 0)), round2(os.reduce((s, o) => s + (o.total || 0), 0)), os[0].method,
-      (f.payments || []).map(x => `${x.method}: ${x.amount}`).join('; '), f.opRef || '']);
+      (f.payments || []).map(x => `${x.method}: ${x.amount}`).join(' | '), f.opRef || '']);
   }
-  return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
+  // "sep=;" le dice a Excel qué separador usar, sin importar el idioma de Windows.
+  return '﻿sep=;\r\n' + rows.map(r => r.map(q).join(';')).join('\r\n');
 }
 
 // ---------- Red local (para conectar celulares/tablets) ----------
