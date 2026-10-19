@@ -446,7 +446,13 @@ async function api(req, res, url) {
   const m = req.method, p = url.pathname;
   if (m !== 'GET' && m !== 'HEAD') { // anti-CSRF: las peticiones que modifican solo valen desde el mismo sitio
     const origin = req.headers.origin;
-    if (origin) { let ok = false; try { ok = new URL(origin).host === req.headers.host; } catch {} if (!ok) bad('Origen no permitido', 403); }
+    if (origin) {
+      const allowed = [req.headers.host];
+      if (TRUST_PROXY && req.headers['x-forwarded-host']) allowed.push(...String(req.headers['x-forwarded-host']).split(',').map(h => h.trim()));
+      if (PUBLIC_URL) { try { allowed.push(new URL(PUBLIC_URL).host); } catch {} }
+      let ok = false; try { ok = allowed.includes(new URL(origin).host); } catch {}
+      if (!ok) bad('Origen no permitido', 403);
+    }
   }
   const body = ['POST', 'PUT', 'PATCH'].includes(m) ? await readJson(req) : {};
   const ip = clientIp(req);
