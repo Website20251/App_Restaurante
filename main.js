@@ -56,7 +56,8 @@ else {
   app.on('second-instance', () => { if (main) { if (main.isMinimized()) main.restore(); main.focus(); } });
   app.whenReady().then(() => {
     require('./ticket-ipc.js').register({ ipcMain, app, shell, baseUrl: URL + '/' });
-    require('./server.js'); // levanta HTTP + tiempo real; también sirve a celulares/tablets en la red local
+    const srv = require('./server.js'); // levanta HTTP + tiempo real; también sirve a celulares/tablets en la red local
+    app.on('before-quit', () => srv.flush()); // no perder el último cambio al cerrar
     buildMenu();
     setTimeout(() => { main = open('/'); main.maximize(); }, 400);
   });

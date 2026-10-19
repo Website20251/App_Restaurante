@@ -9,6 +9,11 @@ const crypto = require('crypto');
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.RESTAURANTE_DATA || path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const ARCHIVE_DIR = path.join(DATA_DIR, 'archivo');
+const BACKUP_KEEP = 14;        // copias diarias que se conservan
+const ARCHIVE_AFTER_DAYS = 60; // pedidos cobrados/cancelados más antiguos pasan al archivo
 const PUBLIC = path.join(__dirname, 'public');
 
 const ROLES = ['admin', 'mesero', 'cocina', 'barra', 'caja'];
@@ -20,7 +25,7 @@ function seed() {
   const c = (id, name) => ({ id, name });
   const i = (id, name, category, price, station, stock = null) => ({ id, name, category, price, station, stock, available: true });
   return {
-    config: { name: 'Mi Restaurante', currency: '$', tables: 12, taxPercent: 0, seq: 100, mergeBar: false, countryCode: '', waiterCharges: false },
+    config: { name: 'Mi Restaurante', currency: '$', tables: 12, taxPercent: 0, taxIncluded: false, seq: 100, mergeBar: false, countryCode: '', waiterCharges: false, dayStartHour: 4, maxDiscountNoAuth: 10, loginList: true },
     categories: [c('ent', 'Entradas'), c('fue', 'Platos fuertes'), c('beb', 'Bebidas'), c('pos', 'Postres')],
     menu: [
       i('m1', 'Ensalada César', 'ent', 8.5, 'cocina'),
@@ -45,18 +50,34 @@ function seed() {
   };
 }
 
-let db;
+let db, sessions = {};
+const BACKUP_RE = /^db-\d{4}-\d{2}-\d{2}\.json$/;
 function load() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); }
-  catch { db = seed(); }
+  catch {
+    // Si el archivo existe pero está dañado, se intenta con la última copia diaria antes de empezar de cero.
+    db = null;
+    if (fs.existsSync(DB_FILE)) {
+      try {
+        const last = fs.readdirSync(BACKUP_DIR).filter(f => BACKUP_RE.test(f)).sort().pop();
+        if (last) { db = JSON.parse(fs.readFileSync(path.join(BACKUP_DIR, last), 'utf8')); console.error('db.json dañado: se restauró', last); }
+      } catch {}
+      if (!db) { try { fs.copyFileSync(DB_FILE, DB_FILE + '.danado-' + Date.now()); } catch {} }
+    }
+    if (!db) db = seed();
+  }
+  try { sessions = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8')); } catch { sessions = {}; }
   migrate();
-  saveNow();
+  saveNow(); saveSessionsNow();
+  maintenance();
 }
 
 // Adapta bases de datos de versiones anteriores (que tenían un PIN único y una lista de meseros).
 function migrate() {
-  db.sessions = db.sessions || {};
+  if (db.sessions) { Object.assign(sessions, db.sessions); delete db.sessions; } // versiones anteriores guardaban las sesiones en db.json
+  const defaults = { taxIncluded: false, dayStartHour: 4, maxDiscountNoAuth: 10, loginList: true };
+  for (const [k, v] of Object.entries(defaults)) if (!(k in db.config)) db.config[k] = v;
   db.stockLog = db.stockLog || [];
   db.payQr = db.payQr || {};
   if (!db.users || !db.users.length) {
@@ -70,7 +91,7 @@ function migrate() {
   }
   delete db.config.pin; delete db.staff;
   const t = now();
-  for (const [k, s] of Object.entries(db.sessions)) if (s.exp < t) delete db.sessions[k];
+  for (const [k, s] of Object.entries(sessions)) if (s.exp < t) delete sessions[k];
 }
 
 let saveTimer = null;
@@ -80,11 +101,56 @@ function saveNow() {
   fs.renameSync(tmp, DB_FILE);
 }
 function save() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 150); }
+// Las sesiones van en su propio archivo para no reescribir toda la base de datos cada vez que se renuevan.
+let sessTimer = null;
+function saveSessionsNow() {
+  try { const tmp = SESSIONS_FILE + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(sessions)); fs.renameSync(tmp, SESSIONS_FILE); } catch (e) { console.error(e); }
+}
+function saveSessions() { clearTimeout(sessTimer); sessTimer = setTimeout(saveSessionsNow, 500); }
+// Guarda todo lo pendiente de inmediato (se usa al cerrar la aplicación).
+function flush() { clearTimeout(saveTimer); clearTimeout(sessTimer); if (db) { saveNow(); saveSessionsNow(); } }
+
+// Mantenimiento diario: copia de respaldo y archivo de pedidos antiguos.
+const ymd = d => { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
+function maintenance() {
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const today = path.join(BACKUP_DIR, 'db-' + ymd(Date.now()) + '.json');
+    if (!fs.existsSync(today)) fs.copyFileSync(DB_FILE, today);
+    const all = fs.readdirSync(BACKUP_DIR).filter(f => BACKUP_RE.test(f)).sort();
+    all.slice(0, Math.max(0, all.length - BACKUP_KEEP)).forEach(f => fs.unlinkSync(path.join(BACKUP_DIR, f)));
+  } catch (e) { console.error('Respaldo:', e.message); }
+  try {
+    const limit = Date.now() - ARCHIVE_AFTER_DAYS * 86400000;
+    const old = db.orders.filter(o => (o.paid || o.cancelled) && (o.paidAt || o.createdAt) < limit);
+    if (!old.length) return;
+    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+    const byMonth = {};
+    for (const o of old) (byMonth[ymd(o.paidAt || o.createdAt).slice(0, 7)] ||= []).push(o);
+    for (const [month, list] of Object.entries(byMonth)) {
+      const f = path.join(ARCHIVE_DIR, 'pedidos-' + month + '.json');
+      let cur = []; try { cur = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
+      const ids = new Set(cur.map(o => o.id));
+      fs.writeFileSync(f + '.tmp', JSON.stringify(cur.concat(list.filter(o => !ids.has(o.id))), null, 1));
+      fs.renameSync(f + '.tmp', f);
+    }
+    const gone = new Set(old.map(o => o.id));
+    db.orders = db.orders.filter(o => !gone.has(o.id));
+    saveNow();
+  } catch (e) { console.error('Archivo:', e.message); }
+}
 
 // ---------- Utilidades ----------
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3);
 const now = () => Date.now();
-const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+// Inicio del día de trabajo: un turno que pasa de medianoche cuenta como un solo día (config.dayStartHour).
+const dayStart = (ts = Date.now()) => {
+  const d = new Date(ts);
+  d.setHours(Math.max(0, Math.min(12, Number(db.config.dayStartHour) || 0)), 0, 0, 0);
+  if (d.getTime() > ts) d.setDate(d.getDate() - 1);
+  return d.getTime();
+};
+const startOfToday = () => dayStart();
 const round2 = n => Math.round(n * 100) / 100;
 
 class HttpError extends Error { constructor(code, msg) { super(msg); this.code = code; } }
@@ -120,22 +186,23 @@ function cookieToken(req) {
 }
 function sessionUser(req) {
   const tok = cookieToken(req);
-  const s = tok && db.sessions[tok];
+  const s = tok && sessions[tok];
   if (!s) return null;
   const t = now();
   const u = db.users.find(x => x.id === s.userId);
-  if (s.exp < t || !u || !u.active) { delete db.sessions[tok]; save(); return null; }
-  if (s.exp - t < SESSION_MS - 600000) { s.exp = t + SESSION_MS; save(); } // renueva cada 10 min de uso
+  if (s.exp < t || !u || !u.active) { delete sessions[tok]; saveSessions(); return null; }
+  if (s.exp - t < SESSION_MS - 600000) { s.exp = t + SESSION_MS; saveSessions(); } // renueva cada 10 min de uso
   return u;
 }
 function login(res, user) {
   const tok = crypto.randomBytes(32).toString('hex');
-  db.sessions[tok] = { userId: user.id, exp: now() + SESSION_MS };
-  save();
+  sessions[tok] = { userId: user.id, exp: now() + SESSION_MS };
+  saveSessions();
   res.setHeader('Set-Cookie', `sid=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MS / 1000}`);
 }
 function dropSessions(userId) {
-  for (const [k, s] of Object.entries(db.sessions)) if (s.userId === userId) delete db.sessions[k];
+  for (const [k, s] of Object.entries(sessions)) if (s.userId === userId) delete sessions[k];
+  saveSessions();
   for (const [res, uid_] of clients) if (uid_ === userId) { res.end(); clients.delete(res); }
 }
 
@@ -244,6 +311,24 @@ function createOrder(body, user) {
   return order;
 }
 
+// Exige la contraseña de un administrador activo (con freno de intentos). Devuelve el administrador que autorizó.
+function approve(user, ip, password) {
+  const key = ip + '|ap|' + user.id;
+  throttle(key);
+  const admin = password ? activeAdmins().find(a => checkPass(a, password)) : null;
+  if (!admin) {
+    if (password) failed(key);
+    bad(password ? 'Contraseña del administrador incorrecta' : 'Requiere autorización del administrador', 403);
+  }
+  return admin;
+}
+
+// Lo tomado de la nevera vuelve al stock al cancelar o quitar.
+function returnStock(it, user, reason) {
+  const m = it.station === 'directo' && db.menu.find(x => x.id === it.itemId);
+  if (m && m.stock != null) logStock(m, m.stock + it.qty, user.name, reason);
+}
+
 function findOrder(id) { return db.orders.find(o => o.id === id) || bad('Pedido no encontrado', 404); }
 
 function setStationStatus(order, station, status) {
@@ -264,14 +349,43 @@ function tableBill(table) {
   return { orders, subtotal };
 }
 
-function report(from) {
-  const paid = db.orders.filter(o => o.paid && o.paidAt >= from);
+// Pedidos del archivo (más antiguos) que caen en el rango, por si el reporte llega más atrás de los 60 días en db.json.
+function archived(from, to) {
+  const out = [];
+  try {
+    for (const f of fs.readdirSync(ARCHIVE_DIR)) {
+      const m = /^pedidos-(\d{4})-(\d{2})\.json$/.exec(f);
+      if (!m) continue;
+      const a = new Date(+m[1], +m[2] - 1, 1).getTime(), b = new Date(+m[1], +m[2], 1).getTime();
+      if (b < from - 86400000 || a > to + 86400000) continue;
+      out.push(...JSON.parse(fs.readFileSync(path.join(ARCHIVE_DIR, f), 'utf8')));
+    }
+  } catch {}
+  return out;
+}
+const allOrders = (from, to) => from < now() - (ARCHIVE_AFTER_DAYS - 2) * 86400000 ? db.orders.concat(archived(from, to)) : db.orders;
+
+// Rango del reporte: ?from=YYYY-MM-DD&to=YYYY-MM-DD, o ?days=N (el día de hoy cuenta desde la hora de corte).
+function rangeOf(url) {
+  const day = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3], Number(db.config.dayStartHour) || 0).getTime() : null; };
+  const f = day(url.searchParams.get('from')), t = day(url.searchParams.get('to'));
+  if (f != null) return { from: f, to: (t != null ? t : f) + 86400000 };
+  const days = Math.min(366, parseInt(url.searchParams.get('days'), 10) || 1);
+  return { from: dayStart() - (days - 1) * 86400000, to: Infinity };
+}
+
+function report(from, to = Infinity) {
+  const orders = allOrders(from, to);
+  const paid = orders.filter(o => o.paid && o.paidAt >= from && o.paidAt < to);
   const sales = round2(paid.reduce((s, o) => s + (o.total || 0), 0));
   const tips = round2(paid.reduce((s, o) => s + (o.tip || 0), 0));
   const byMethod = {}, top = {}, byWaiter = {};
-  let prepSum = 0, prepN = 0;
+  let prepSum = 0, prepN = 0, discounts = 0;
   for (const o of paid) {
-    byMethod[o.method] = round2((byMethod[o.method] || 0) + (o.total || 0));
+    // Un cobro dividido reparte el total entre sus métodos.
+    if (o.payments && o.payments.length) for (const x of o.payments) byMethod[x.method] = round2((byMethod[x.method] || 0) + x.amount);
+    else byMethod[o.method] = round2((byMethod[o.method] || 0) + (o.total || 0));
+    if (o.bill) discounts = round2(discounts + (o.bill.discount || 0));
     byWaiter[o.waiter] = round2((byWaiter[o.waiter] || 0) + o.items.reduce((a, i) => a + i.price * i.qty, 0));
     for (const i of o.items) {
       top[i.name] = (top[i.name] || 0) + i.qty;
@@ -280,11 +394,29 @@ function report(from) {
   }
   const sorted = obj => Object.entries(obj).sort((a, b) => b[1] - a[1]);
   return {
-    sales, tips, tickets: new Set(paid.map(o => o.paidRef)).size, orders: paid.length,
+    sales, tips, discounts, tickets: new Set(paid.map(o => o.paidRef)).size, orders: paid.length,
     avgPrepMin: prepN ? round2(prepSum / prepN / 60000) : 0,
     byMethod, top: sorted(top).slice(0, 8), byWaiter: sorted(byWaiter),
-    cancelled: db.orders.filter(o => o.cancelled && o.createdAt >= from).length,
+    cancelled: orders.filter(o => o.cancelled && o.createdAt >= from && o.createdAt < to).length,
+    from, to: to === Infinity ? now() : to - 1,
   };
+}
+
+// Una fila por cuenta cobrada, para abrir en Excel.
+function reportCsv(from, to) {
+  const groups = new Map();
+  for (const o of allOrders(from, to)) if (o.paid && o.paidAt >= from && o.paidAt < to) (groups.get(o.paidRef) || groups.set(o.paidRef, []).get(o.paidRef)).push(o);
+  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const rows = [['Fecha', 'Hora', 'Mesa', 'Mesero', 'Cajero', 'Productos', 'Subtotal', 'Descuento', 'Motivo descuento', 'Autorizó', 'Impuesto', 'Propina', 'Total', 'Método', 'Detalle pago', 'N° operación']];
+  for (const os of [...groups.values()].sort((a, b) => a[0].paidAt - b[0].paidAt)) {
+    const f = os.find(o => o.bill) || os[0], b = f.bill || {}, d = new Date(os[0].paidAt);
+    const lines = os.flatMap(o => o.items.map(i => `${i.qty}x ${i.name}`)).join('; ');
+    const subtotal = b.subtotal ?? round2(os.reduce((s, o) => s + o.items.reduce((a, i) => a + i.price * i.qty, 0), 0));
+    rows.push([ymd(d), d.toTimeString().slice(0, 5), os[0].table, os[0].waiter, os[0].cashier || '', lines, subtotal, b.discount || 0, b.discountReason || '', b.approvedBy || '', b.tax || 0,
+      round2(os.reduce((s, o) => s + (o.tip || 0), 0)), round2(os.reduce((s, o) => s + (o.total || 0), 0)), os[0].method,
+      (f.payments || []).map(x => `${x.method}: ${x.amount}`).join('; '), f.opRef || '']);
+  }
+  return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
 }
 
 // ---------- Red local (para conectar celulares/tablets) ----------
@@ -304,13 +436,17 @@ async function api(req, res, url) {
   let mt;
 
   // --- Públicas: lista de usuarios para elegir y login ---
+  // Con config.loginList desactivado no se muestra quién tiene cuenta: hay que escribir el nombre.
   if (m === 'GET' && p === '/api/login-users') {
-    return send(res, 200, db.users.filter(u => u.active).map(u => ({ id: u.id, name: u.name, role: u.role })));
+    if (db.config.loginList === false) return send(res, 200, { hidden: true, users: [] });
+    return send(res, 200, { hidden: false, users: db.users.filter(u => u.active).map(u => ({ id: u.id, name: u.name, role: u.role })) });
   }
   if (m === 'POST' && p === '/api/login') {
-    const key = ip + '|' + body.userId;
+    const byName = body.name ? String(body.name).trim().toLowerCase() : null;
+    const found = byName ? db.users.find(x => x.active && x.name.toLowerCase() === byName) : db.users.find(x => x.id === body.userId && x.active);
+    const key = ip + '|' + (found ? found.id : 'x|' + (byName || body.userId));
     throttle(key);
-    const u = db.users.find(x => x.id === body.userId && x.active);
+    const u = found;
     if (!u || !checkPass(u, body.password || '')) { failed(key); bad('Contraseña incorrecta', 401); }
     fails.delete(key);
     login(res, u);
@@ -323,7 +459,7 @@ async function api(req, res, url) {
 
   if (m === 'GET' && p === '/api/me') return send(res, 200, { ...publicUser(user), home: homeFor(user) });
   if (m === 'POST' && p === '/api/logout') {
-    delete db.sessions[cookieToken(req)]; save();
+    delete sessions[cookieToken(req)]; saveSessions();
     res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
     return send(res, 200, { ok: true });
   }
@@ -356,7 +492,7 @@ async function api(req, res, url) {
     need(user, 'mesero');
     const o = findOrder(mt[1]);
     const t = now();
-    for (const it of o.items) if (it.status === 'listo') { it.status = 'entregado'; it.deliveredAt = t; }
+    for (const it of o.items) if (it.status === 'listo') { it.status = 'entregado'; it.deliveredAt = t; it.deliveredBy = user.name; }
     changed(); return send(res, 200, o);
   }
   if ((mt = p.match(/^\/api\/orders\/(\w+)\/cancel$/)) && m === 'POST') {
@@ -366,20 +502,23 @@ async function api(req, res, url) {
     // Sin autorización solo se puede cancelar un pedido propio que la cocina aún no tocó.
     const free = user.role === 'admin' ||
       (o.items.filter(i => i.station !== 'directo').every(i => i.status === 'pendiente') && (user.role === 'caja' || o.waiterId === user.id));
-    if (!free) {
-      const key = ip + '|ap|' + user.id;
-      throttle(key);
-      const ok = body.approverPassword && activeAdmins().some(a => checkPass(a, body.approverPassword));
-      if (!ok) {
-        if (body.approverPassword) failed(key);
-        bad(body.approverPassword ? 'Contraseña del administrador incorrecta' : 'Requiere autorización del administrador', 403);
-      }
-    }
-    for (const it of o.items) { // lo tomado de la nevera vuelve al stock
-      const m = it.station === 'directo' && db.menu.find(x => x.id === it.itemId);
-      if (m && m.stock != null) logStock(m, m.stock + it.qty, user.name, 'pedido cancelado #' + o.num);
-    }
+    if (!free) approve(user, ip, body.approverPassword);
+    for (const it of o.items) returnStock(it, user, 'pedido cancelado #' + o.num);
     o.cancelled = true; o.cancelReason = String(body.reason || '').slice(0, 140); o.cancelledBy = user.name;
+    changed(); return send(res, 200, o);
+  }
+  // Quitar un solo producto de un pedido ya enviado (mismas reglas de autorización que cancelar).
+  if ((mt = p.match(/^\/api\/orders\/(\w+)\/items\/(\w+)\/remove$/)) && m === 'POST') {
+    need(user, 'mesero', 'caja');
+    const o = findOrder(mt[1]);
+    if (o.paid || o.cancelled) bad('El pedido ya está cerrado', 409);
+    const it = o.items.find(x => x.id === mt[2]) || bad('Producto no encontrado en el pedido', 404);
+    const free = user.role === 'admin' || ((it.station === 'directo' || it.status === 'pendiente') && (user.role === 'caja' || o.waiterId === user.id));
+    if (!free) approve(user, ip, body.approverPassword);
+    returnStock(it, user, 'producto quitado del pedido #' + o.num);
+    o.items = o.items.filter(x => x !== it);
+    (o.removed ||= []).push({ name: it.name, qty: it.qty, by: user.name, at: now(), reason: String(body.reason || '').slice(0, 140) });
+    if (!o.items.length) { o.cancelled = true; o.cancelReason = 'Sin productos'; o.cancelledBy = user.name; }
     changed(); return send(res, 200, o);
   }
 
@@ -390,20 +529,39 @@ async function api(req, res, url) {
     if (!orders.length) bad('La mesa no tiene cuenta pendiente', 409);
     // Los descuentos solo los da caja o el administrador, no un mesero que cobra.
     const discPct = user.role === 'mesero' ? 0 : Math.min(100, Math.max(0, Number(body.discountPercent) || 0));
+    // Hasta cierto porcentaje (config.maxDiscountNoAuth) caja decide sola; por encima necesita la clave de un administrador.
+    let approvedBy = null;
+    if (discPct > 0 && user.role !== 'admin' && discPct > (Number(db.config.maxDiscountNoAuth) || 0)) approvedBy = approve(user, ip, body.approverPassword).name;
     const discount = round2(subtotal * discPct / 100);
-    const tax = round2((subtotal - discount) * (db.config.taxPercent || 0) / 100);
+    const base = round2(subtotal - discount), pct = db.config.taxPercent || 0;
+    // Con precios que ya incluyen impuesto, este solo se informa (se extrae del total); si no, se suma encima.
+    const tax = db.config.taxIncluded ? round2(base * pct / (100 + pct)) : round2(base * pct / 100);
     const tip = Math.max(0, round2(Number(body.tip) || 0));
-    const total = round2(subtotal - discount + tax + tip);
-    const method = ['efectivo', 'yape', 'plin', 'tarjeta', 'transferencia'].includes(body.method) ? body.method : 'efectivo';
+    const total = round2(db.config.taxIncluded ? base + tip : base + tax + tip);
+    const METHODS = ['efectivo', 'yape', 'plin', 'tarjeta', 'transferencia'];
+    // Pago dividido: lista [{ method, amount }] que debe sumar exactamente el total.
+    let payments;
+    if (Array.isArray(body.payments) && body.payments.length) {
+      payments = body.payments.map(x => ({ method: METHODS.includes(x.method) ? x.method : 'efectivo', amount: round2(Number(x.amount) || 0) })).filter(x => x.amount > 0);
+      if (Math.abs(round2(payments.reduce((s, x) => s + x.amount, 0)) - total) > 0.01) bad('Los pagos no suman el total de la cuenta', 400);
+    } else {
+      payments = [{ method: METHODS.includes(body.method) ? body.method : 'efectivo', amount: total }];
+    }
+    const method = payments.length > 1 ? 'mixto' : payments[0].method;
     const ref = uid(), t = now();
     // El total se asigna al primer pedido del grupo; el resto queda en 0 para no duplicar ventas.
     orders.forEach((o, idx) => {
       o.paid = true; o.paidAt = t; o.method = method; o.paidRef = ref; o.cashier = user.name;
       o.total = idx === 0 ? total : 0; o.tip = idx === 0 ? tip : 0;
-      if (idx === 0) { o.bill = { subtotal, discount, tax }; if (body.opRef) o.opRef = String(body.opRef).slice(0, 40); }
+      if (idx === 0) {
+        o.bill = { subtotal, discount, tax, taxIncluded: !!db.config.taxIncluded };
+        o.payments = payments;
+        if (discount) { o.bill.discountPct = discPct; o.bill.discountReason = String(body.discountReason || '').slice(0, 100); if (approvedBy) o.bill.approvedBy = approvedBy; }
+        if (body.opRef) o.opRef = String(body.opRef).slice(0, 40);
+      }
     });
     changed();
-    return send(res, 200, { total, subtotal, discount, tax, tip, method, ref, orders: orders.length });
+    return send(res, 200, { total, subtotal, discount, tax, taxIncluded: !!db.config.taxIncluded, tip, method, payments, ref, orders: orders.length });
   }
 
   // Cobros de hoy, para reimprimir o reenviar un ticket.
@@ -425,7 +583,8 @@ async function api(req, res, url) {
       let discount, tax;
       if (withBill) ({ discount, tax } = withBill.bill);
       else { const d = round2(subtotal - (total - tip)); discount = Math.max(0, d); tax = Math.max(0, -d); } // cobros anteriores a esta versión
-      out.push({ ref, table: os[0].table, paidAt: os[0].paidAt, lines, subtotal, discount, tax, tip, total, method: os[0].method, cashier: os[0].cashier || '' });
+      const first = withBill || os[0];
+      out.push({ ref, table: os[0].table, paidAt: os[0].paidAt, lines, subtotal, discount, tax, taxIncluded: !!(withBill && withBill.bill.taxIncluded), tip, total, method: os[0].method, payments: first.payments || null, cashier: os[0].cashier || '' });
     }
     out.sort((a, b) => b.paidAt - a.paidAt);
     return send(res, 200, out.slice(0, 15));
@@ -520,6 +679,10 @@ async function api(req, res, url) {
     if (body.tables) c.tables = Math.max(1, Math.min(100, parseInt(body.tables, 10) || c.tables));
     if ('taxPercent' in body) c.taxPercent = Math.max(0, Math.min(50, Number(body.taxPercent) || 0));
     if ('waiterCharges' in body) c.waiterCharges = !!body.waiterCharges;
+    if ('taxIncluded' in body) c.taxIncluded = !!body.taxIncluded;
+    if ('loginList' in body) c.loginList = !!body.loginList;
+    if ('dayStartHour' in body) c.dayStartHour = Math.max(0, Math.min(12, parseInt(body.dayStartHour, 10) || 0));
+    if ('maxDiscountNoAuth' in body) c.maxDiscountNoAuth = Math.max(0, Math.min(100, Number(body.maxDiscountNoAuth) || 0));
     if ('countryCode' in body) c.countryCode = String(body.countryCode).replace(/\D/g, '').slice(0, 4);
     if ('mergeBar' in body && !!body.mergeBar !== !!c.mergeBar) {
       c.mergeBar = !!body.mergeBar;
@@ -555,9 +718,36 @@ async function api(req, res, url) {
     });
   }
   if (m === 'GET' && p === '/api/report') {
-    const days = parseInt(url.searchParams.get('days'), 10) || 1;
-    const from = startOfToday() - (days - 1) * 86400000;
-    return send(res, 200, report(from));
+    const r = rangeOf(url);
+    return send(res, 200, report(r.from, r.to));
+  }
+  if (m === 'GET' && p === '/api/report.csv') {
+    const r = rangeOf(url);
+    res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="ventas-${ymd(r.from)}.csv"`, 'Cache-Control': 'no-store' });
+    return res.end(reportCsv(r.from, r.to));
+  }
+
+  // Categorías del menú
+  if (m === 'POST' && p === '/api/categories') {
+    const name = String(body.name || '').trim().slice(0, 40);
+    if (!name) bad('Falta el nombre');
+    if (db.categories.some(c => c.name.toLowerCase() === name.toLowerCase())) bad('Ya existe una categoría con ese nombre', 409);
+    const c = { id: 'c' + uid(), name }; db.categories.push(c);
+    changed(); return send(res, 201, c);
+  }
+  if ((mt = p.match(/^\/api\/categories\/(\w+)$/))) {
+    const c = db.categories.find(x => x.id === mt[1]) || bad('Categoría no encontrada', 404);
+    if (m === 'PATCH') {
+      const name = String(body.name || '').trim().slice(0, 40);
+      if (!name) bad('Falta el nombre');
+      if (db.categories.some(x => x.id !== c.id && x.name.toLowerCase() === name.toLowerCase())) bad('Ya existe una categoría con ese nombre', 409);
+      c.name = name; changed(); return send(res, 200, c);
+    }
+    if (m === 'DELETE') {
+      if (db.menu.some(x => x.category === c.id)) bad('La categoría tiene productos: muévelos o bórralos primero', 409);
+      db.categories = db.categories.filter(x => x !== c);
+      changed(); return send(res, 200, { ok: true });
+    }
   }
 
   // Usuarios
@@ -685,11 +875,27 @@ const server = http.createServer(async (req, res) => {
   }
 });
 setInterval(() => { for (const r of clients.keys()) r.write(': ping\n\n'); }, 25000); // mantiene viva la conexión
+setInterval(() => { // limpia intentos fallidos vencidos y sesiones caducadas
+  const t = now();
+  for (const [k, f] of fails) if (f.until < t && f.n === 0) fails.delete(k);
+  for (const [k, s] of Object.entries(sessions)) if (s.exp < t) delete sessions[k];
+}, 600000).unref();
+setInterval(maintenance, 6 * 3600 * 1000).unref(); // respaldo diario y archivo de pedidos viejos
 
+server.on('error', e => {
+  const msg = e.code === 'EADDRINUSE'
+    ? `El puerto ${PORT} ya está en uso por otro programa (o hay otra copia del sistema abierta). Ciérralo e inténtalo de nuevo.`
+    : 'No se pudo iniciar el servidor: ' + e.message;
+  console.error(msg);
+  try { require('electron').dialog.showErrorBox('Restaurante', msg); require('electron').app.exit(1); } catch { process.exit(1); }
+});
 server.listen(PORT, '0.0.0.0', () => {
   const ips = Object.values(os.networkInterfaces()).flat().filter(n => n.family === 'IPv4' && !n.internal).map(n => n.address);
   console.log(`\n  Sistema de restaurante en marcha\n  Local:  http://localhost:${PORT}`);
   ips.forEach(ip => console.log(`  Red:    http://${ip}:${PORT}   <- úsalo en celulares/tablets/pantalla de cocina`));
   console.log('');
 });
-process.on('SIGINT', () => { saveNow(); process.exit(0); });
+process.on('SIGINT', () => { flush(); process.exit(0); });
+process.on('SIGTERM', () => { flush(); process.exit(0); });
+process.on('exit', flush);
+module.exports = { flush }; // la app de escritorio lo llama antes de cerrar
