@@ -1,59 +1,143 @@
 <!doctype html>
-<html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#f59e0b">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" type="image/png" href="/icon-192.png">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Restaurante">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<title>Administración</title><link rel="stylesheet" href="/style.css">
-<style>
-  .wrap { max-width: 1000px; margin: 0 auto; padding: 16px; }
-  .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; } .tabs .btn.active { background: var(--accent); color: var(--accent-ink); }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 14px 0; }
-  .stat b { display: block; font-size: 26px; margin-top: 4px; }
-  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
-  table { width: 100%; border-collapse: collapse; } th { text-align: left; font-size: 12px; color: var(--muted); text-transform: uppercase; }
-  td, th { padding: 8px 6px; border-bottom: 1px solid var(--line); } td.r, th.r { text-align: right; }
-  .bar { height: 8px; background: var(--accent); border-radius: 4px; margin-top: 4px; }
-  .form { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 8px; align-items: end; } @media (max-width: 760px) { .form { grid-template-columns: 1fr 1fr; } }
-</style>
-</head><body>
-<div class="wrap">
-  <div class="tabs"><button class="btn active" data-tab="rep">📊 Reportes</button><button class="btn" data-tab="menu">📋 Menú</button><button class="btn" data-tab="reg">🧊 Embotellados</button><button class="btn" data-tab="users">👥 Usuarios</button><button class="btn" data-tab="cfg">⚙️ Ajustes</button></div>
-  <div id="view"></div>
-</div>
-<script src="/app.js"></script>
-<script>
-App.topbar('Administración');
-let tab = 'rep', days = 1, rep = null, range = null; // range = { from, to } (YYYY-MM-DD) o null
-document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
-  tab = b.dataset.tab;
-  document.querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('active', x === b));
-  render();
-});
-// Evita que el tiempo real borre lo que se está escribiendo.
-const typing = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
-App.connect(() => { if (!typing()) render(); });
+<html lang="es">
 
-async function render() {
-  if (!App.state) return;
-  if (tab === 'rep') return renderRep();
-  if (tab === 'menu') return renderMenu();
-  if (tab === 'users') return renderUsers();
-  if (tab === 'reg') return renderRegistry();
-  renderCfg();
-}
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f59e0b">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Restaurante">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Administración</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .wrap {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 16px;
+    }
 
-async function renderRep() {
-  const qs = range ? `from=${range.from}&to=${range.to}` : `days=${days}`;
-  try { rep = await App.api('GET', `/api/report?${qs}`); } catch (e) { return App.toast(e.message, 'err'); }
-  const iso = ts => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
-  const max = Math.max(1, ...rep.top.map(t => t[1]));
-  document.getElementById('view').innerHTML = `
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .tabs .btn.active {
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+      margin: 14px 0;
+    }
+
+    .stat b {
+      display: block;
+      font-size: 26px;
+      margin-top: 4px;
+    }
+
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    @media (max-width: 760px) {
+      .two {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th {
+      text-align: left;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    td,
+    th {
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    td.r,
+    th.r {
+      text-align: right;
+    }
+
+    .bar {
+      height: 8px;
+      background: var(--accent);
+      border-radius: 4px;
+      margin-top: 4px;
+    }
+
+    .form {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr auto;
+      gap: 8px;
+      align-items: end;
+    }
+
+    @media (max-width: 760px) {
+      .form {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="tabs"><button class="btn active" data-tab="rep">📊 Reportes</button><button class="btn"
+        data-tab="menu">📋 Menú</button><button class="btn" data-tab="reg">🧊 Embotellados</button><button class="btn"
+        data-tab="users">👥 Usuarios</button><button class="btn" data-tab="cfg">⚙️ Ajustes</button></div>
+    <div id="view"></div>
+  </div>
+  <script src="/app.js"></script>
+  <script>
+    App.topbar('Administración');
+    let tab = 'rep', days = 1, rep = null, range = null; // range = { from, to } (YYYY-MM-DD) o null
+    document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
+      tab = b.dataset.tab;
+      document.querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('active', x === b));
+      render();
+    });
+    // Evita que el tiempo real borre lo que se está escribiendo.
+    const typing = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
+    App.connect(() => { if (!typing()) render(); });
+
+    async function render() {
+      if (!App.state) return;
+      if (tab === 'rep') return renderRep();
+      if (tab === 'menu') return renderMenu();
+      if (tab === 'users') return renderUsers();
+      if (tab === 'reg') return renderRegistry();
+      renderCfg();
+    }
+
+    async function renderRep() {
+      const qs = range ? `from=${range.from}&to=${range.to}` : `days=${days}`;
+      try { rep = await App.api('GET', `/api/report?${qs}`); } catch (e) { return App.toast(e.message, 'err'); }
+      const iso = ts => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+      const max = Math.max(1, ...rep.top.map(t => t[1]));
+      document.getElementById('view').innerHTML = `
     <div class="tabs">${[[1, 'Hoy'], [7, '7 días'], [30, '30 días']].map(([d, l]) => `<button class="btn sm ${!range && days === d ? 'active' : ''}" data-d="${d}">${l}</button>`).join('')}
       <span class="muted" style="align-self:center">o desde</span><input type="date" id="rf" style="width:auto" value="${range ? range.from : iso(rep.from)}">
       <span class="muted" style="align-self:center">hasta</span><input type="date" id="rt" style="width:auto" value="${range ? range.to : iso(rep.to)}">
@@ -71,17 +155,17 @@ async function renderRep() {
       <div class="card"><h3>Por método de pago</h3>${Object.entries(rep.byMethod).map(([m, v]) => `<div style="display:flex;justify-content:space-between;padding:6px 0"><span>${m}</span><b>${App.money(v)}</b></div>`).join('') || '<p class="muted">—</p>'}
         <h3 style="margin-top:18px">Por mesero</h3>${rep.byWaiter.map(([m, v]) => `<div style="display:flex;justify-content:space-between;padding:6px 0"><span>${App.esc(m)}</span><b>${App.money(v)}</b></div>`).join('') || '<p class="muted">—</p>'}</div>
     </div>`;
-  document.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { days = +b.dataset.d; range = null; renderRep(); });
-  const applyRange = () => { const a = document.getElementById('rf').value, b = document.getElementById('rt').value; if (a && b && a <= b) { range = { from: a, to: b }; renderRep(); } };
-  document.getElementById('rf').onchange = document.getElementById('rt').onchange = applyRange;
-}
+      document.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { days = +b.dataset.d; range = null; renderRep(); });
+      const applyRange = () => { const a = document.getElementById('rf').value, b = document.getElementById('rt').value; if (a && b && a <= b) { range = { from: a, to: b }; renderRep(); } };
+      document.getElementById('rf').onchange = document.getElementById('rt').onchange = applyRange;
+    }
 
-const KIND = { cocina: '🍳 Cocina', barra: '🍹 Barra', directo: '🧊 De fábrica' };
-const KIND_HELP = { cocina: 'Se prepara en la cocina', barra: 'Se prepara en la barra (limonada, café…)', directo: 'De fábrica: lo toma el mesero, no pasa por cocina ni barra' };
+    const KIND = { cocina: '🍳 Cocina', barra: '🍹 Barra', directo: '🧊 De fábrica' };
+    const KIND_HELP = { cocina: 'Se prepara en la cocina', barra: 'Se prepara en la barra (limonada, café…)', directo: 'De fábrica: lo toma el mesero, no pasa por cocina ni barra' };
 
-function renderMenu() {
-  const s = App.state, cat = id => s.categories.find(c => c.id === id)?.name || '';
-  document.getElementById('view').innerHTML = `
+    function renderMenu() {
+      const s = App.state, cat = id => s.categories.find(c => c.id === id)?.name || '';
+      document.getElementById('view').innerHTML = `
     <div class="card"><h3>Nuevo producto</h3><div class="form" style="grid-template-columns:2fr 1fr 1.4fr 2.2fr 1fr auto">
       <div><label>Nombre</label><input id="n"></div>
       <div><label>Precio</label><input id="p" type="number" min="0" step="0.1"></div>
@@ -97,34 +181,34 @@ function renderMenu() {
     ${s.menu.map(m => `<tr><td>${App.esc(m.name)} ${m.available ? '' : '<span class="badge agotado">agotado</span>'}</td><td>${App.esc(cat(m.category))}</td><td>${KIND[m.station]}</td>
       <td class="r">${m.stock == null ? '<span class="muted">—</span>' : `<b style="color:${m.stock <= 5 ? 'var(--danger)' : 'inherit'}">${m.stock}</b>`}</td>
       <td class="r">${App.money(m.price)}</td><td class="r"><button class="btn sm" data-e="${m.id}">Editar</button> <button class="btn sm danger" data-x="${m.id}">Borrar</button></td></tr>`).join('')}</table></div>`;
-  const showStock = () => document.getElementById('stw').classList.toggle('hidden', st.value !== 'directo');
-  st.onchange = showStock; showStock();
-  document.getElementById('add').onclick = async () => {
-    try {
-      await App.api('POST', '/api/menu', { name: n.value, price: p.value, category: c.value, station: st.value, stock: sk.value });
-      App.toast('Producto agregado', 'ok');
-    } catch (e) { App.toast(e.message, 'err'); }
-  };
-  document.getElementById('addcat').onclick = () => App.api('POST', '/api/categories', { name: document.getElementById('newcat').value }).then(() => App.toast('Categoría agregada', 'ok')).catch(e => App.toast(e.message, 'err'));
-  document.querySelectorAll('[data-cn]').forEach(b => b.onclick = async () => {
-    const c = s.categories.find(x => x.id === b.dataset.cn), n = await App.ask({ title: 'Renombrar categoría', label: 'Nuevo nombre', value: c.name, okLabel: 'Guardar' });
-    if (n !== null) App.api('PATCH', '/api/categories/' + c.id, { name: n }).catch(e => App.toast(e.message, 'err'));
-  });
-  document.querySelectorAll('[data-cd]').forEach(b => b.onclick = async () => {
-    const c = s.categories.find(x => x.id === b.dataset.cd);
-    if (await App.confirm('¿Borrar categoría?', '"' + c.name + '" solo se puede borrar si no tiene productos.', 'Borrar')) App.api('DELETE', '/api/categories/' + c.id).catch(e => App.toast(e.message, 'err'));
-  });
-  document.querySelectorAll('[data-x]').forEach(b => b.onclick = async () => {
-    if (await App.confirm('¿Borrar producto?', 'Los pedidos ya hechos no se ven afectados.', 'Borrar')) App.api('DELETE', `/api/menu/${b.dataset.x}`).catch(e => App.toast(e.message, 'err'));
-  });
-  document.querySelectorAll('[data-e]').forEach(b => b.onclick = () => editItem(s.menu.find(x => x.id === b.dataset.e), s));
-}
+      const showStock = () => document.getElementById('stw').classList.toggle('hidden', st.value !== 'directo');
+      st.onchange = showStock; showStock();
+      document.getElementById('add').onclick = async () => {
+        try {
+          await App.api('POST', '/api/menu', { name: n.value, price: p.value, category: c.value, station: st.value, stock: sk.value });
+          App.toast('Producto agregado', 'ok');
+        } catch (e) { App.toast(e.message, 'err'); }
+      };
+      document.getElementById('addcat').onclick = () => App.api('POST', '/api/categories', { name: document.getElementById('newcat').value }).then(() => App.toast('Categoría agregada', 'ok')).catch(e => App.toast(e.message, 'err'));
+      document.querySelectorAll('[data-cn]').forEach(b => b.onclick = async () => {
+        const c = s.categories.find(x => x.id === b.dataset.cn), n = await App.ask({ title: 'Renombrar categoría', label: 'Nuevo nombre', value: c.name, okLabel: 'Guardar' });
+        if (n !== null) App.api('PATCH', '/api/categories/' + c.id, { name: n }).catch(e => App.toast(e.message, 'err'));
+      });
+      document.querySelectorAll('[data-cd]').forEach(b => b.onclick = async () => {
+        const c = s.categories.find(x => x.id === b.dataset.cd);
+        if (await App.confirm('¿Borrar categoría?', '"' + c.name + '" solo se puede borrar si no tiene productos.', 'Borrar')) App.api('DELETE', '/api/categories/' + c.id).catch(e => App.toast(e.message, 'err'));
+      });
+      document.querySelectorAll('[data-x]').forEach(b => b.onclick = async () => {
+        if (await App.confirm('¿Borrar producto?', 'Los pedidos ya hechos no se ven afectados.', 'Borrar')) App.api('DELETE', `/api/menu/${b.dataset.x}`).catch(e => App.toast(e.message, 'err'));
+      });
+      document.querySelectorAll('[data-e]').forEach(b => b.onclick = () => editItem(s.menu.find(x => x.id === b.dataset.e), s));
+    }
 
-// Ventana para editar un producto completo.
-function editItem(m, s, preset) {
-  const bg = document.createElement('div');
-  bg.className = 'modal-bg';
-  bg.innerHTML = `<div class="modal"><h3>${preset ? 'Marcar como de fábrica' : 'Editar producto'}</h3>
+    // Ventana para editar un producto completo.
+    function editItem(m, s, preset) {
+      const bg = document.createElement('div');
+      bg.className = 'modal-bg';
+      bg.innerHTML = `<div class="modal"><h3>${preset ? 'Marcar como de fábrica' : 'Editar producto'}</h3>
     <label>Nombre</label><input id="en" value="${App.esc(m.name)}">
     <div class="two"><div><label>Precio</label><input id="ep" type="number" min="0" step="0.1" value="${m.price}"></div>
     <div><label>Categoría</label><select id="ec">${s.categories.map(c => `<option value="${c.id}" ${c.id === m.category ? 'selected' : ''}>${App.esc(c.name)}</option>`).join('')}</select></div></div>
@@ -133,27 +217,27 @@ function editItem(m, s, preset) {
     <div id="esw"><label>Stock actual</label><input id="ek" type="number" min="0" value="${m.stock ?? ''}" placeholder="vacío = sin control de stock"></div>
     <p id="eerr" style="color:var(--danger);min-height:20px;margin-top:6px"></p>
     <div class="row"><button class="btn" id="eno">Cancelar</button><button class="btn primary" id="eok">Guardar</button></div></div>`;
-  document.body.append(bg);
-  const q = id => bg.querySelector('#' + id);
-  const sync = () => { q('eh').textContent = KIND_HELP[q('es').value]; q('esw').classList.toggle('hidden', q('es').value !== 'directo'); };
-  q('es').onchange = sync; sync();
-  q('eno').onclick = () => bg.remove();
-  q('eok').onclick = async () => {
-    try {
-      await App.api('PATCH', `/api/menu/${m.id}`, { name: q('en').value, price: q('ep').value, category: q('ec').value, station: q('es').value, stock: q('es').value === 'directo' ? q('ek').value : null });
-      bg.remove(); App.toast('Producto actualizado', 'ok');
-    } catch (e) { q('eerr').textContent = e.message; }
-  };
-}
+      document.body.append(bg);
+      const q = id => bg.querySelector('#' + id);
+      const sync = () => { q('eh').textContent = KIND_HELP[q('es').value]; q('esw').classList.toggle('hidden', q('es').value !== 'directo'); };
+      q('es').onchange = sync; sync();
+      q('eno').onclick = () => bg.remove();
+      q('eok').onclick = async () => {
+        try {
+          await App.api('PATCH', `/api/menu/${m.id}`, { name: q('en').value, price: q('ep').value, category: q('ec').value, station: q('es').value, stock: q('es').value === 'directo' ? q('ek').value : null });
+          bg.remove(); App.toast('Producto actualizado', 'ok');
+        } catch (e) { q('eerr').textContent = e.message; }
+      };
+    }
 
-// Registro de productos de fábrica tomados por los meseros + movimientos de stock.
-let regDays = 1;
-async function renderRegistry() {
-  let d;
-  try { d = await App.api('GET', `/api/registry?days=${regDays}`); } catch (e) { return App.toast(e.message, 'err'); }
-  const dt = t => new Date(t).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-  const units = d.totals.reduce((a, [, q]) => a + q, 0);
-  document.getElementById('view').innerHTML = `
+    // Registro de productos de fábrica tomados por los meseros + movimientos de stock.
+    let regDays = 1;
+    async function renderRegistry() {
+      let d;
+      try { d = await App.api('GET', `/api/registry?days=${regDays}`); } catch (e) { return App.toast(e.message, 'err'); }
+      const dt = t => new Date(t).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const units = d.totals.reduce((a, [, q]) => a + q, 0);
+      document.getElementById('view').innerHTML = `
     <div class="tabs">${[[1, 'Hoy'], [7, '7 días'], [30, '30 días']].map(([n, l]) => `<button class="btn sm ${regDays === n ? 'active' : ''}" data-rd="${n}">${l}</button>`).join('')}</div>
     <div class="stats"><div class="card stat"><span class="muted">Unidades tomadas</span><b>${units}</b></div>
       ${d.totals.slice(0, 3).map(([n, q]) => `<div class="card stat"><span class="muted">${App.esc(n)}</span><b>${q}</b></div>`).join('')}</div>
@@ -161,35 +245,37 @@ async function renderRegistry() {
       <div class="card"><h3>Stock actual</h3><table>${d.stock.map(x => `<tr><td>${App.esc(x.name)}</td>
         <td class="r">${x.stock == null ? '<span class="muted">sin control</span>' : `<b style="color:${x.stock <= 5 ? 'var(--danger)' : 'inherit'}">${x.stock}</b>`}</td>
         <td class="r">${x.stock == null ? '' : `<button class="btn sm" data-re="${x.id}">+ Reponer</button>`}</td></tr>`).join('') || '<tr><td class="muted">Aún no marcaste ninguno.</td></tr>'}</table>
-        ${(() => { const others = App.state.menu.filter(x => x.station !== 'directo'); return others.length ? `
+        ${(() => {
+          const others = App.state.menu.filter(x => x.station !== 'directo'); return others.length ? `
         <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
           <b>Marcar un producto como "de fábrica"</b>
           <p class="muted" style="font-size:13px;margin:4px 0 8px">Elige las bebidas que el mesero toma de la nevera (gaseosa, cerveza, agua…). Ya no llegarán a cocina ni a barra y quedarán en este registro.</p>
           <div style="display:flex;gap:8px"><select id="rg">${others.map(x => `<option value="${x.id}">${App.esc(x.name)}</option>`).join('')}</select>
-          <button class="btn primary" id="rgb">Marcar…</button></div></div>` : ''; })()}</div>
+          <button class="btn primary" id="rgb">Marcar…</button></div></div>` : '';
+        })()}</div>
       <div class="card"><h3>Movimientos de stock</h3><table>${d.movements.map(x => `<tr><td>${dt(x.t)}</td><td>${App.esc(x.name)}</td>
         <td class="r">${x.before ?? '—'} → <b>${x.after}</b></td><td class="muted">${App.esc(x.reason)} · ${App.esc(x.by)}</td></tr>`).join('') || '<tr><td class="muted">Sin movimientos.</td></tr>'}</table></div></div>
     <div class="card" style="margin-top:14px"><h3>Bebidas de fábrica tomadas</h3>
       <table><tr><th>Hora</th><th>Mesa</th><th>Mesero</th><th>Producto</th><th class="r">Cant.</th></tr>
       ${d.rows.map(x => `<tr style="${x.cancelled ? 'opacity:.5;text-decoration:line-through' : ''}"><td>${dt(x.t)}</td><td>${x.table}</td><td>${App.esc(x.waiter)}</td><td>${App.esc(x.name)}${x.cancelled ? ' <span class="badge agotado">cancelado</span>' : ''}</td><td class="r">${x.qty}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Sin registros en este período.</td></tr>'}</table></div>`;
-  document.querySelectorAll('[data-rd]').forEach(b => b.onclick = () => { regDays = +b.dataset.rd; renderRegistry(); });
-  const rgb = document.getElementById('rgb');
-  if (rgb) rgb.onclick = () => editItem(App.state.menu.find(x => x.id === document.getElementById('rg').value), App.state, 'directo');
-  document.querySelectorAll('[data-re]').forEach(b => b.onclick = async () => {
-    const it = App.state.menu.find(x => x.id === b.dataset.re);
-    const v = await App.ask({ title: 'Reponer stock', text: it.name + ' — stock actual: ' + (it.stock ?? 0), label: 'Unidades que ingresaron', type: 'number', placeholder: 'ej. 24', okLabel: 'Reponer' });
-    const n = parseInt(v, 10);
-    if (!(n > 0)) return;
-    try { await App.api('PATCH', `/api/menu/${it.id}`, { stock: (it.stock || 0) + n }); App.toast('Stock repuesto', 'ok'); renderRegistry(); }
-    catch (e) { App.toast(e.message, 'err'); }
-  });
-}
+      document.querySelectorAll('[data-rd]').forEach(b => b.onclick = () => { regDays = +b.dataset.rd; renderRegistry(); });
+      const rgb = document.getElementById('rgb');
+      if (rgb) rgb.onclick = () => editItem(App.state.menu.find(x => x.id === document.getElementById('rg').value), App.state, 'directo');
+      document.querySelectorAll('[data-re]').forEach(b => b.onclick = async () => {
+        const it = App.state.menu.find(x => x.id === b.dataset.re);
+        const v = await App.ask({ title: 'Reponer stock', text: it.name + ' — stock actual: ' + (it.stock ?? 0), label: 'Unidades que ingresaron', type: 'number', placeholder: 'ej. 24', okLabel: 'Reponer' });
+        const n = parseInt(v, 10);
+        if (!(n > 0)) return;
+        try { await App.api('PATCH', `/api/menu/${it.id}`, { stock: (it.stock || 0) + n }); App.toast('Stock repuesto', 'ok'); renderRegistry(); }
+        catch (e) { App.toast(e.message, 'err'); }
+      });
+    }
 
-const ROLES = { admin: 'Administrador', mesero: 'Mesero', cocina: 'Cocina', barra: 'Barra', caja: 'Caja' };
-async function renderUsers() {
-  let users;
-  try { users = await App.api('GET', '/api/users'); } catch (e) { return App.toast(e.message, 'err'); }
-  document.getElementById('view').innerHTML = `
+    const ROLES = { admin: 'Administrador', mesero: 'Mesero', cocina: 'Cocina', barra: 'Barra', caja: 'Caja' };
+    async function renderUsers() {
+      let users;
+      try { users = await App.api('GET', '/api/users'); } catch (e) { return App.toast(e.message, 'err'); }
+      document.getElementById('view').innerHTML = `
     <div class="card"><h3>Nuevo usuario</h3><div class="form" style="grid-template-columns:2fr 1.2fr 2fr auto">
       <div><label>Nombre</label><input id="un" autocomplete="off"></div>
       <div><label>Rol</label><select id="ur">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${k === 'mesero' ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
@@ -202,19 +288,19 @@ async function renderUsers() {
       <button class="btn sm" data-ro="${u.id}">Rol</button> <button class="btn sm" data-ac="${u.id}" data-on="${u.active}">${u.active ? 'Desactivar' : 'Activar'}</button>
       ${u.id === App.me.id ? '' : `<button class="btn sm danger" data-rm="${u.id}">Borrar</button>`}</td></tr>`).join('')}</table>
     <p class="muted" style="margin-top:10px;font-size:13px">Al crear un usuario o restablecer su clave, la persona debe elegir una contraseña propia en su primer ingreso. Solo el administrador puede entrar a todas las pantallas.</p></div>`;
-  const act = fn => fn().then(renderUsers).catch(e => App.toast(e.message, 'err'));
-  const find = id => users.find(u => u.id === id);
-  document.getElementById('uadd').onclick = () => act(async () => { await App.api('POST', '/api/users', { name: un.value, role: ur.value, password: up.value }); App.toast('Usuario creado', 'ok'); });
-  document.querySelectorAll('[data-rn]').forEach(b => b.onclick = async () => { const u = find(b.dataset.rn), n = await App.ask({ title: 'Renombrar usuario', label: 'Nuevo nombre', value: u.name, okLabel: 'Guardar' }); if (n !== null) act(() => App.api('PATCH', '/api/users/' + u.id, { name: n })); });
-  document.querySelectorAll('[data-rp]').forEach(b => b.onclick = async () => { const u = find(b.dataset.rp), p = await App.ask({ title: 'Restablecer clave de ' + u.name, text: 'Escribe una contraseña temporal (mínimo 4 caracteres). Deberá cambiarla al entrar.', label: 'Contraseña temporal', placeholder: 'ej. mesa2026', okLabel: 'Restablecer' }); if (p) act(async () => { await App.api('PATCH', '/api/users/' + u.id, { password: p }); App.toast('Clave restablecida', 'ok'); }); });
-  document.querySelectorAll('[data-ro]').forEach(b => b.onclick = async () => { const u = find(b.dataset.ro), r = await App.ask({ title: 'Cambiar rol de ' + u.name, text: 'Al cambiar el rol, su sesión se cierra y deberá volver a entrar.', label: 'Rol', value: u.role, options: Object.entries(ROLES), okLabel: 'Cambiar' }); if (r && r !== u.role) act(() => App.api('PATCH', '/api/users/' + u.id, { role: r })); });
-  document.querySelectorAll('[data-ac]').forEach(b => b.onclick = () => act(() => App.api('PATCH', '/api/users/' + b.dataset.ac, { active: b.dataset.on !== 'true' })));
-  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => { if (await App.confirm('¿Borrar usuario?', 'Sus pedidos anteriores se conservan en los reportes.', 'Borrar')) act(() => App.api('DELETE', '/api/users/' + b.dataset.rm)); });
-}
+      const act = fn => fn().then(renderUsers).catch(e => App.toast(e.message, 'err'));
+      const find = id => users.find(u => u.id === id);
+      document.getElementById('uadd').onclick = () => act(async () => { await App.api('POST', '/api/users', { name: un.value, role: ur.value, password: up.value }); App.toast('Usuario creado', 'ok'); });
+      document.querySelectorAll('[data-rn]').forEach(b => b.onclick = async () => { const u = find(b.dataset.rn), n = await App.ask({ title: 'Renombrar usuario', label: 'Nuevo nombre', value: u.name, okLabel: 'Guardar' }); if (n !== null) act(() => App.api('PATCH', '/api/users/' + u.id, { name: n })); });
+      document.querySelectorAll('[data-rp]').forEach(b => b.onclick = async () => { const u = find(b.dataset.rp), p = await App.ask({ title: 'Restablecer clave de ' + u.name, text: 'Escribe una contraseña temporal (mínimo 4 caracteres). Deberá cambiarla al entrar.', label: 'Contraseña temporal', placeholder: 'ej. mesa2026', okLabel: 'Restablecer' }); if (p) act(async () => { await App.api('PATCH', '/api/users/' + u.id, { password: p }); App.toast('Clave restablecida', 'ok'); }); });
+      document.querySelectorAll('[data-ro]').forEach(b => b.onclick = async () => { const u = find(b.dataset.ro), r = await App.ask({ title: 'Cambiar rol de ' + u.name, text: 'Al cambiar el rol, su sesión se cierra y deberá volver a entrar.', label: 'Rol', value: u.role, options: Object.entries(ROLES), okLabel: 'Cambiar' }); if (r && r !== u.role) act(() => App.api('PATCH', '/api/users/' + u.id, { role: r })); });
+      document.querySelectorAll('[data-ac]').forEach(b => b.onclick = () => act(() => App.api('PATCH', '/api/users/' + b.dataset.ac, { active: b.dataset.on !== 'true' })));
+      document.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => { if (await App.confirm('¿Borrar usuario?', 'Sus pedidos anteriores se conservan en los reportes.', 'Borrar')) act(() => App.api('DELETE', '/api/users/' + b.dataset.rm)); });
+    }
 
-function renderCfg() {
-  const c = App.state.config;
-  document.getElementById('view').innerHTML = `<div class="card" style="max-width:520px">
+    function renderCfg() {
+      const c = App.state.config;
+      document.getElementById('view').innerHTML = `<div class="card" style="max-width:520px">
     <label>Nombre del restaurante</label><input id="name" value="${App.esc(c.name)}">
     <div class="two"><div><label>Moneda</label><input id="cur" value="${App.esc(c.currency)}"></div>
     <div><label>Número de mesas</label><input id="tb" type="number" min="1" max="100" value="${c.tables}"></div></div>
@@ -238,38 +324,36 @@ function renderCfg() {
     <p class="muted" style="margin-top:12px">Los meseros, cocina y caja se administran en la pestaña <b>Usuarios</b>.</p>
     <button class="btn primary lg block" id="save" style="margin-top:16px">Guardar cambios</button></div>
     ${qrCard('yape', 'Yape', c)}${qrCard('plin', 'Plin', c)}`;
-  document.getElementById('save').onclick = async () => {
-    try {
-      // Se leen por id con getElementById: "name" a secas es window.name y no el campo del formulario.
-      const g = id => document.getElementById(id);
-      await App.api('PUT', '/api/config', { name: g('name').value, currency: g('cur').value, tables: g('tb').value, taxPercent: g('tax').value, taxIncluded: g('ti').checked, maxDiscountNoAuth: g('md').value, dayStartHour: g('dsh').value, loginList: g('ll').checked, mergeBar: g('mb').checked, countryCode: g('cc').value, waiterCharges: g('wc').checked });
-      App.toast('Ajustes guardados', 'ok');
-    } catch (e) { App.toast(e.message, 'err'); }
-  };
-  for (const k of ['yape', 'plin']) {
-    const info = App.state.payInfo[k];
-    document.getElementById('qs_' + k).onclick = async () => {
-      try {
-        const file = document.getElementById('qf_' + k).files[0];
-        const body = { phone: document.getElementById('qp_' + k).value, holder: document.getElementById('qh_' + k).value };
-        if (file) body.image = await imageToDataUrl(file);
-        await App.api('PUT', '/api/pay-qr/' + k, body);
-        App.toast(k === 'yape' ? 'Yape guardado' : 'Plin guardado', 'ok');
-        renderCfg();
-      } catch (e) { App.toast(e.message, 'err'); }
-    };
-    document.getElementById('qd_' + k).onclick = async () => {
-      if (await App.confirm('¿Quitar ' + (k === 'yape' ? 'Yape' : 'Plin') + '?', 'Se borrará el QR y el número guardados.', 'Quitar')) {
-        try { await App.api('DELETE', '/api/pay-qr/' + k); renderCfg(); } catch (e) { App.toast(e.message, 'err'); }
+      document.getElementById('save').onclick = async () => {
+        try {
+          await App.api('PUT', '/api/config', { name: name.value, currency: cur.value, tables: tb.value, taxPercent: tax.value, taxIncluded: ti.checked, maxDiscountNoAuth: md.value, dayStartHour: dsh.value, loginList: ll.checked, mergeBar: mb.checked, countryCode: cc.value, waiterCharges: wc.checked });
+          App.toast('Ajustes guardados', 'ok');
+        } catch (e) { App.toast(e.message, 'err'); }
+      };
+      for (const k of ['yape', 'plin']) {
+        const info = App.state.payInfo[k];
+        document.getElementById('qs_' + k).onclick = async () => {
+          try {
+            const file = document.getElementById('qf_' + k).files[0];
+            const body = { phone: document.getElementById('qp_' + k).value, holder: document.getElementById('qh_' + k).value };
+            if (file) body.image = await imageToDataUrl(file);
+            await App.api('PUT', '/api/pay-qr/' + k, body);
+            App.toast(k === 'yape' ? 'Yape guardado' : 'Plin guardado', 'ok');
+            renderCfg();
+          } catch (e) { App.toast(e.message, 'err'); }
+        };
+        document.getElementById('qd_' + k).onclick = async () => {
+          if (await App.confirm('¿Quitar ' + (k === 'yape' ? 'Yape' : 'Plin') + '?', 'Se borrará el QR y el número guardados.', 'Quitar')) {
+            try { await App.api('DELETE', '/api/pay-qr/' + k); renderCfg(); } catch (e) { App.toast(e.message, 'err'); }
+          }
+        };
       }
-    };
-  }
-}
+    }
 
-// Tarjeta para subir el QR de Yape / Plin.
-function qrCard(k, label, c) {
-  const info = (App.state.payInfo || {})[k] || {};
-  return `<div class="card" style="max-width:520px;margin-top:14px"><h3>${label === 'Yape' ? '💜' : '💙'} Cobro con ${label}</h3>
+    // Tarjeta para subir el QR de Yape / Plin.
+    function qrCard(k, label, c) {
+      const info = (App.state.payInfo || {})[k] || {};
+      return `<div class="card" style="max-width:520px;margin-top:14px"><h3>${label === 'Yape' ? '💜' : '💙'} Cobro con ${label}</h3>
     <p class="muted" style="font-size:13px;margin:4px 0 10px">Sube la captura del QR de tu ${label}. Al cobrar con ${label} se mostrará en pantalla con el monto, para que el cliente lo escanee.</p>
     <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
       <div style="width:140px;height:140px;border:1px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden;flex:none">
@@ -278,17 +362,19 @@ function qrCard(k, label, c) {
         <label>Número de ${label}</label><input id="qp_${k}" inputmode="tel" placeholder="ej. 987654321" value="${App.esc(info.phone || '')}">
         <label>A nombre de</label><input id="qh_${k}" placeholder="ej. Mi Restaurante SAC" value="${App.esc(info.holder || '')}"></div></div>
     <div class="row"><button class="btn danger" id="qd_${k}" ${info.qr || info.phone ? '' : 'disabled'}>Quitar</button><button class="btn primary" id="qs_${k}">Guardar ${label}</button></div></div>`;
-}
+    }
 
-// Reduce la imagen (máx. 720 px) para que pese poco. Se conserva PNG (nítido para un QR) salvo que sea muy pesada.
-async function imageToDataUrl(file) {
-  const bmp = await createImageBitmap(file);
-  const sc = Math.min(1, 720 / Math.max(bmp.width, bmp.height));
-  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc);
-  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(bmp, 0, 0, c.width, c.height);
-  let url = c.toDataURL('image/png');
-  if (url.length > 900000) url = c.toDataURL('image/jpeg', 0.9);
-  return url;
-}
-</script>
-</body></html>
+    // Reduce la imagen (máx. 720 px) para que pese poco. Se conserva PNG (nítido para un QR) salvo que sea muy pesada.
+    async function imageToDataUrl(file) {
+      const bmp = await createImageBitmap(file);
+      const sc = Math.min(1, 720 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas'); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc);
+      const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(bmp, 0, 0, c.width, c.height);
+      let url = c.toDataURL('image/png');
+      if (url.length > 900000) url = c.toDataURL('image/jpeg', 0.9);
+      return url;
+    }
+  </script>
+</body>
+
+</html>

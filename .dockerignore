@@ -1,0 +1,8 @@
+node_modules
+instalador
+data
+.git
+*.log
+main.js
+preload.js
+ticket-ipc.js

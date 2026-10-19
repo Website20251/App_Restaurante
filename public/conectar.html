@@ -46,7 +46,7 @@
 const SCREENS = [['/mesero.html', '📝 Mesero'], ['/cocina.html?e=cocina', '👨‍🍳 Cocina'], ['/cocina.html?e=barra', '🍹 Barra'], ['/caja.html', '💵 Caja'], ['/', '🏠 Inicio']];
 let screen = SCREENS[0][0], net = null, ipIdx = 0;
 
-const urlFor = (ip) => `http://${ip}:${net.port}${screen}`;
+const urlFor = (cur) => (cur.base || `http://${cur.ip}:${net.port}`) + screen;
 
 function draw() {
   document.getElementById('tabs').innerHTML = SCREENS.map(([p, l]) => `<button class="btn ${p === screen ? 'active' : ''}" data-p="${p}">${l}</button>`).join('');
@@ -56,12 +56,12 @@ function draw() {
     document.getElementById('main').innerHTML = '<p>No se encontró una red. Conecta esta computadora al WiFi o a un cable de red y vuelve a abrir esta pantalla.</p>';
     return;
   }
-  const cur = net.ips[ipIdx], u = urlFor(cur.ip);
+  const cur = net.ips[ipIdx], u = urlFor(cur);
   document.getElementById('main').innerHTML = `<div class="qr"><img alt="Código QR" src="/api/qr?text=${encodeURIComponent(u)}"></div>
     <div><span class="muted">Escanea el QR o escribe esta dirección:</span>
     <div class="url">${App.esc(u)}</div>
     <button class="btn" id="copy">📋 Copiar dirección</button>
-    <p class="muted" style="margin-top:10px">IP de esta computadora: <b>${App.esc(cur.ip)}</b> <span style="opacity:.7">(${App.esc(cur.name)})</span></p></div>`;
+    <p class="muted" style="margin-top:10px">${net.web ? 'Dirección del sistema en internet: <b>' + App.esc(cur.ip) + '</b>' : 'IP de esta computadora: <b>' + App.esc(cur.ip) + '</b> <span style="opacity:.7">(' + App.esc(cur.name) + ')</span>'}</p></div>`;
   document.getElementById('copy').onclick = async () => { try { await navigator.clipboard.writeText(u); App.toast('Dirección copiada', 'ok'); } catch { App.toast('No se pudo copiar', 'err'); } };
 
   const alt = document.getElementById('alt');

@@ -1,0 +1,22 @@
+# Despliegue en un servidor (AWS Lightsail/EC2): app + HTTPS automático con Caddy.
+# Uso: crea un archivo .env junto a este con DOMAIN y ADMIN_PASSWORD y ejecuta: docker compose up -d --build
+services:
+  app:
+    build: .
+    restart: always
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?define ADMIN_PASSWORD en .env}
+      PUBLIC_URL: https://${DOMAIN:?define DOMAIN en .env}
+    volumes:
+      - datos:/data
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports: ["80:80", "443:443"]
+    command: caddy reverse-proxy --from ${DOMAIN} --to app:3000
+    volumes:
+      - caddy:/data
+    depends_on: [app]
+volumes:
+  datos:
+  caddy:

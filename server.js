@@ -15,6 +15,12 @@ const ARCHIVE_DIR = path.join(DATA_DIR, 'archivo');
 const BACKUP_KEEP = 14;        // copias diarias que se conservan
 const ARCHIVE_AFTER_DAYS = 60; // pedidos cobrados/cancelados más antiguos pasan al archivo
 const PUBLIC = path.join(__dirname, 'public');
+// Modo web (nube): detrás de un proxy con HTTPS. TRUST_PROXY=1 usa X-Forwarded-*; ADMIN_PASSWORD crea solo el administrador.
+const TRUST_PROXY = /^(1|true|yes)$/i.test(process.env.TRUST_PROXY || '');
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+const clientIp = req => (TRUST_PROXY && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress;
+const isHttps = req => /^https/i.test(PUBLIC_URL) || (TRUST_PROXY && req.headers['x-forwarded-proto'] === 'https');
 
 const ROLES = ['admin', 'mesero', 'cocina', 'barra', 'caja'];
 const SESSION_MS = 16 * 3600 * 1000; // la sesión se renueva con el uso
@@ -82,13 +88,17 @@ function migrate() {
   db.payQr = db.payQr || {};
   if (!db.users || !db.users.length) {
     db.users = [];
-    const adminPass = db.config.pin ? String(db.config.pin) : TEMP_PASSWORD;
+    const adminPass = ADMIN_PASSWORD || (db.config.pin ? String(db.config.pin) : TEMP_PASSWORD);
     addUser('Administrador', 'admin', adminPass, true);
+    if (ADMIN_PASSWORD) { db.config.loginList = false; return finishMigrate(); } // nube: solo el administrador, que crea al resto
     (db.staff || ['Carlos', 'María', 'Luis']).forEach(n => addUser(n, 'mesero', TEMP_PASSWORD, true));
     addUser('Cocina', 'cocina', TEMP_PASSWORD, true);
     addUser('Barra', 'barra', TEMP_PASSWORD, true);
     addUser('Caja', 'caja', TEMP_PASSWORD, true);
   }
+  finishMigrate();
+}
+function finishMigrate() {
   delete db.config.pin; delete db.staff;
   const t = now();
   for (const [k, s] of Object.entries(sessions)) if (s.exp < t) delete sessions[k];
@@ -194,11 +204,12 @@ function sessionUser(req) {
   if (s.exp - t < SESSION_MS - 600000) { s.exp = t + SESSION_MS; saveSessions(); } // renueva cada 10 min de uso
   return u;
 }
-function login(res, user) {
+const cookieFlags = req => `HttpOnly; SameSite=Lax; Path=/${isHttps(req) ? '; Secure' : ''}`;
+function login(req, res, user) {
   const tok = crypto.randomBytes(32).toString('hex');
   sessions[tok] = { userId: user.id, exp: now() + SESSION_MS };
   saveSessions();
-  res.setHeader('Set-Cookie', `sid=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MS / 1000}`);
+  res.setHeader('Set-Cookie', `sid=${tok}; ${cookieFlags(req)}; Max-Age=${SESSION_MS / 1000}`);
 }
 function dropSessions(userId) {
   for (const [k, s] of Object.entries(sessions)) if (s.userId === userId) delete sessions[k];
@@ -433,8 +444,12 @@ function lanIps() {
 // ---------- Rutas API ----------
 async function api(req, res, url) {
   const m = req.method, p = url.pathname;
+  if (m !== 'GET' && m !== 'HEAD') { // anti-CSRF: las peticiones que modifican solo valen desde el mismo sitio
+    const origin = req.headers.origin;
+    if (origin) { let ok = false; try { ok = new URL(origin).host === req.headers.host; } catch {} if (!ok) bad('Origen no permitido', 403); }
+  }
   const body = ['POST', 'PUT', 'PATCH'].includes(m) ? await readJson(req) : {};
-  const ip = req.socket.remoteAddress;
+  const ip = clientIp(req);
   let mt;
 
   // --- Públicas: lista de usuarios para elegir y login ---
@@ -451,7 +466,7 @@ async function api(req, res, url) {
     const u = found;
     if (!u || !checkPass(u, body.password || '')) { failed(key); bad('Contraseña incorrecta', 401); }
     fails.delete(key);
-    login(res, u);
+    login(req, res, u);
     return send(res, 200, { ...publicUser(u), home: homeFor(u) });
   }
 
@@ -462,7 +477,7 @@ async function api(req, res, url) {
   if (m === 'GET' && p === '/api/me') return send(res, 200, { ...publicUser(user), home: homeFor(user) });
   if (m === 'POST' && p === '/api/logout') {
     delete sessions[cookieToken(req)]; saveSessions();
-    res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+    res.setHeader('Set-Cookie', `sid=; ${cookieFlags(req)}; Max-Age=0`);
     return send(res, 200, { ok: true });
   }
   if (m === 'POST' && p === '/api/me/password') {
@@ -652,7 +667,15 @@ async function api(req, res, url) {
   // --- Solo administrador ---
   need(user);
 
-  if (m === 'GET' && p === '/api/network') return send(res, 200, { port: Number(PORT), ips: lanIps() });
+  if (m === 'GET' && p === '/api/network') {
+    const host = req.headers.host || '';
+    const local = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\])/.test(host);
+    if (PUBLIC_URL || !local) { // en la nube todos usan la misma dirección pública
+      const base = PUBLIC_URL || `${isHttps(req) ? 'https' : 'http'}://${host}`;
+      return send(res, 200, { port: Number(PORT), web: true, ips: [{ name: 'Internet', ip: new URL(base).host, base }] });
+    }
+    return send(res, 200, { port: Number(PORT), ips: lanIps() });
+  }
   if (m === 'GET' && p === '/api/qr') {
     const text = url.searchParams.get('text') || '';
     if (!/^https?:\/\/[\w.:\/?=&-]{1,200}$/.test(text)) bad('Texto inválido');
@@ -858,6 +881,10 @@ function serveStatic(req, res, url) {
 load();
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  if (isHttps(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
   try {
     if (url.pathname === '/api/events') {
       const user = sessionUser(req);
@@ -868,6 +895,7 @@ const server = http.createServer(async (req, res) => {
       req.on('close', () => clients.delete(res));
       return;
     }
+    if (url.pathname === '/healthz') return send(res, 200, { ok: true });
     if (url.pathname.startsWith('/api/')) return await api(req, res, url);
     serveStatic(req, res, url);
   } catch (e) {
