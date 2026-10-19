@@ -240,7 +240,9 @@ function renderCfg() {
     ${qrCard('yape', 'Yape', c)}${qrCard('plin', 'Plin', c)}`;
   document.getElementById('save').onclick = async () => {
     try {
-      await App.api('PUT', '/api/config', { name: name.value, currency: cur.value, tables: tb.value, taxPercent: tax.value, taxIncluded: ti.checked, maxDiscountNoAuth: md.value, dayStartHour: dsh.value, loginList: ll.checked, mergeBar: mb.checked, countryCode: cc.value, waiterCharges: wc.checked });
+      // Se leen por id con getElementById: "name" a secas es window.name y no el campo del formulario.
+      const g = id => document.getElementById(id);
+      await App.api('PUT', '/api/config', { name: g('name').value, currency: g('cur').value, tables: g('tb').value, taxPercent: g('tax').value, taxIncluded: g('ti').checked, maxDiscountNoAuth: g('md').value, dayStartHour: g('dsh').value, loginList: g('ll').checked, mergeBar: g('mb').checked, countryCode: g('cc').value, waiterCharges: g('wc').checked });
       App.toast('Ajustes guardados', 'ok');
     } catch (e) { App.toast(e.message, 'err'); }
   };
