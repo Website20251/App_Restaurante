@@ -194,7 +194,7 @@ function renderOrder(s) {
         ${t.orders.length ? t.orders.map(o => `<div class="sent"><div class="hd"><span><b>#${o.num}</b> · ${App.hhmm(o.createdAt)} · ${App.esc(o.waiter)}</span>
           <span>${o.items.some(i => i.status === 'listo') ? `<button class="btn ok sm" data-del="${o.id}">Entregar</button>` : ''}
           <button class="btn danger sm" data-cx="${o.id}">✕</button></span></div>
-          <ul>${o.items.map(i => `<li><span>${i.qty}× ${App.esc(i.name)}${i.note ? ` <small class="muted">(${App.esc(i.note)})</small>` : ''}</span>${i.station === 'directo' ? `<span class="badge entregado">🧊 tomado${i.takenBy ? ' por ' + App.esc(i.takenBy) : ''}</span>` : `<span class="badge ${i.status}">${i.status}</span>`}</li>`).join('')}</ul></div>`).join('')
+          <ul>${o.items.map(i => `<li><span>${i.qty}× ${App.esc(i.name)}${i.note ? ` <small class="muted">(${App.esc(i.note)})</small>` : ''}</span><span>${i.station === 'directo' ? `<span class="badge entregado">🧊 tomado${i.takenBy ? ' por ' + App.esc(i.takenBy) : ''}</span>` : `<span class="badge ${i.status}">${i.status}</span>`} <button class="btn sm" data-rmi="${o.id}|${i.id}" title="Quitar este producto" style="padding:0 6px">✕</button></span></li>`).join('')}</ul></div>`).join('')
           : '<p class="muted" style="margin:8px 0">Aún sin pedidos.</p>'}
         <div class="tot"><span>Consumo</span><span>${App.money(t.total)}</span></div>
         ${App.state.config.waiterCharges
@@ -240,6 +240,22 @@ function renderOrder(s) {
     } catch (err) { App.toast(err.message, 'err'); e.target.disabled = false; }
   };
   $('[data-del]').forEach(b => b.onclick = async () => { try { await App.api('POST', `/api/orders/${b.dataset.del}/deliver`); App.toast('Marcado como entregado', 'ok'); } catch (e) { App.toast(e.message, 'err'); } });
+  $('[data-rmi]').forEach(b => b.onclick = async () => {
+    const [oid, iid] = b.dataset.rmi.split('|');
+    const it = s.orders.find(x => x.id === oid)?.items.find(x => x.id === iid);
+    if (!it || !await App.confirm('¿Quitar este producto?', `${it.qty}× ${it.name}. Si ya está en preparación o el pedido es de otro mesero, necesitará la autorización de un administrador.`, 'Sí, quitar')) return;
+    const remove = approverPassword => App.api('POST', `/api/orders/${oid}/items/${iid}/remove`, { approverPassword });
+    try {
+      try { await remove(); }
+      catch (e) {
+        if (e.status !== 403) throw e;
+        const pw = await App.askApproval('Este producto ya está en preparación o es de otro mesero. Pide a un administrador que escriba su contraseña.');
+        if (!pw) return;
+        await remove(pw);
+      }
+      App.toast('Producto quitado', 'ok');
+    } catch (e) { App.toast(e.message, 'err'); }
+  });
   $('[data-cx]').forEach(b => b.onclick = async () => {
     if (!await App.confirm('¿Cancelar este pedido?', 'Si no es tuyo o ya está en preparación, necesitará la autorización de un administrador.', 'Sí, cancelar')) return;
     const o = s.orders.find(x => x.id === b.dataset.cx);

@@ -47,7 +47,9 @@
 App.topbar('Caja', '<a class="btn sm hidden" id="toMesas" href="/mesero.html">← Mesas</a>');
 App.loadMe().then(u => { if (u.role === 'mesero') document.getElementById('toMesas').classList.remove('hidden'); });
 // Un mesero llega desde "Cobrar esta mesa" con ?mesa=N
-const S = { table: +new URLSearchParams(location.search).get('mesa') || null, method: 'efectivo', disc: 0, tip: 0, cash: '', op: '' };
+const METHODS = ['efectivo', 'yape', 'plin', 'tarjeta', 'transferencia'], cap = m => m[0].toUpperCase() + m.slice(1);
+const S = { table: +new URLSearchParams(location.search).get('mesa') || null, method: 'efectivo', disc: 0, tip: 0, cash: '', op: '', reason: '', split: false, pays: [] };
+const resetBill = () => { S.disc = 0; S.tip = 0; S.cash = ''; S.op = ''; S.reason = ''; S.split = false; S.pays = []; };
 let recent = [];
 // Cobros de hoy: permiten reimprimir o reenviar un ticket. Se refresca con cada cambio.
 async function loadRecent() {
@@ -74,10 +76,18 @@ function render() {
       <p class="muted" style="font-size:12px;margin-top:6px">Toca uno para reimprimir o enviar el ticket por WhatsApp.</p></div></div>
     <div class="card">${sel ? bill(s, sel) : '<p class="muted">Selecciona una mesa para cobrar.</p>'}</div>`;
   document.querySelectorAll('[data-rc]').forEach(b => b.onclick = () => showReceipt(recent[+b.dataset.rc]));
-  document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { S.table = +b.dataset.t; S.disc = 0; S.tip = 0; S.cash = ''; S.op = ''; render(); });
+  document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { S.table = +b.dataset.t; resetBill(); render(); });
   if (!sel) return;
   const bind = (id, key, num = true) => { const e = document.getElementById(id); if (!e) return; e.oninput = () => { S[key] = num ? Math.max(0, +e.value || 0) : e.value; update(); }; };
-  bind('disc', 'disc'); bind('tip', 'tip'); bind('cash', 'cash', false); bind('op', 'op', false);
+  bind('disc', 'disc'); bind('tip', 'tip'); bind('cash', 'cash', false); bind('op', 'op', false); bind('reason', 'reason', false);
+  const sb = document.getElementById('splitBtn');
+  if (sb) sb.onclick = () => { S.split = !S.split; if (S.split && !S.pays.length) S.pays = [{ method: 'efectivo', amount: '' }, { method: 'yape', amount: '' }]; render(); };
+  document.querySelectorAll('[data-sm]').forEach(e => e.onchange = () => { S.pays[+e.dataset.sm].method = e.value; update(); });
+  document.querySelectorAll('[data-sa]').forEach(e => e.oninput = () => { S.pays[+e.dataset.sa].amount = e.value; update(); });
+  document.querySelectorAll('[data-sx]').forEach(e => e.onclick = () => { S.pays.splice(+e.dataset.sx, 1); render(); });
+  const sadd = document.getElementById('sadd'); if (sadd) sadd.onclick = () => { S.pays.push({ method: 'efectivo', amount: '' }); render(); };
+  const sfill = document.getElementById('sfill');
+  if (sfill) sfill.onclick = () => { const last = S.pays[S.pays.length - 1], others = S.pays.slice(0, -1).reduce((a, x) => a + (+x.amount || 0), 0); last.amount = Math.max(0, Math.round((calc().total - others) * 100) / 100); render(); };
   const qb = document.getElementById('qrBig'), qi = document.getElementById('qrimg');
   if (qb) qb.onclick = qi.onclick = bigQr;
   document.querySelectorAll('[data-pm]').forEach(b => b.onclick = () => { S.method = b.dataset.pm; render(); });
@@ -87,20 +97,28 @@ function render() {
 
 function calc() {
   const s = App.state, t = App.tableInfo(S.table);
-  const sub = t.total, discount = sub * Math.min(100, S.disc) / 100;
-  const tax = (sub - discount) * (s.config.taxPercent || 0) / 100;
-  return { sub, discount, tax, tip: S.tip, total: sub - discount + tax + S.tip };
+  const sub = t.total, discount = sub * Math.min(100, S.disc) / 100, base = sub - discount, pct = s.config.taxPercent || 0;
+  // Con precios que ya incluyen impuesto, solo se informa; si no, se suma encima.
+  const incl = !!s.config.taxIncluded, tax = incl ? base * pct / (100 + pct) : base * pct / 100;
+  return { sub, discount, tax, incl, tip: S.tip, total: incl ? base + S.tip : base + tax + S.tip };
 }
 function update() {
   const c = calc();
   document.getElementById('sum').innerHTML = `<div><span>Subtotal</span><span>${App.money(c.sub)}</span></div>
     ${c.discount ? `<div><span>Descuento</span><span>−${App.money(c.discount)}</span></div>` : ''}
-    ${c.tax ? `<div><span>Impuesto (${App.state.config.taxPercent}%)</span><span>${App.money(c.tax)}</span></div>` : ''}
+    ${c.tax ? `<div><span>Impuesto (${App.state.config.taxPercent}%${c.incl ? ' incluido' : ''})</span><span>${App.money(c.tax)}</span></div>` : ''}
     ${c.tip ? `<div><span>Propina</span><span>${App.money(c.tip)}</span></div>` : ''}
     <div class="big"><span>TOTAL</span><span>${App.money(c.total)}</span></div>`;
   const qa = document.getElementById('qrAmt'); if (qa) qa.textContent = App.money(c.total);
   const ch = document.getElementById('change');
   if (ch) ch.textContent = S.cash !== '' ? 'Vuelto: ' + App.money(Math.max(0, +S.cash - c.total)) : '';
+  const rem = document.getElementById('srem');
+  if (rem) {
+    const left = Math.round((c.total - S.pays.reduce((a, x) => a + (+x.amount || 0), 0)) * 100) / 100;
+    rem.textContent = left > 0.005 ? 'Falta cobrar ' + App.money(left) : left < -0.005 ? 'Sobran ' + App.money(-left) : 'Pago completo ✓';
+    rem.style.color = Math.abs(left) < 0.005 ? 'var(--ok)' : 'var(--danger)';
+    document.getElementById('pay').disabled = Math.abs(left) >= 0.005;
+  }
 }
 
 // QR de Yape/Plin para que el cliente escanee, con el monto a pagar.
@@ -124,6 +142,15 @@ function bigQr() {
   document.body.append(bg);
 }
 
+function splitUi() {
+  return `${S.pays.map((x, i) => `<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-bottom:6px;align-items:center">
+      <select data-sm="${i}">${METHODS.map(m => `<option value="${m}" ${m === x.method ? 'selected' : ''}>${cap(m)}</option>`).join('')}</select>
+      <input data-sa="${i}" type="number" min="0" step="0.01" value="${x.amount}" placeholder="Monto">
+      ${S.pays.length > 2 ? `<button class="btn sm danger" data-sx="${i}">✕</button>` : '<span></span>'}</div>`).join('')}
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="sadd">+ Otro método</button><button class="btn sm" id="sfill">Completar el último</button></div>
+    <p id="srem" style="margin-top:6px;font-weight:700"></p>`;
+}
+
 function bill(s, t) {
   const lines = t.orders.flatMap(o => o.items.map(i => ({ ...i, order: o })));
   const pend = lines.filter(i => i.status !== 'entregado').length;
@@ -133,11 +160,12 @@ function bill(s, t) {
     <div class="row2">
       ${App.me.role === 'mesero' ? '<div></div>' : `<div><label>Descuento %</label><input id="disc" type="number" min="0" max="100" value="${S.disc || ''}"></div>`}
       <div><label>Propina ${App.esc(s.config.currency)}</label><input id="tip" type="number" min="0" step="0.5" value="${S.tip || ''}"></div></div>
-    <label>Método de pago</label>
-    <div class="methods">${['efectivo', 'yape', 'plin', 'tarjeta', 'transferencia'].map(m => `<button class="btn ${S.method === m ? 'active' : ''}" data-pm="${m}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>
-    ${S.method === 'efectivo' ? `<label>Recibido</label><input id="cash" type="number" min="0" value="${S.cash}"><p id="change" style="margin-top:6px;font-weight:700;color:var(--ok)"></p>` : '<input id="cash" class="hidden">'}
-    ${S.method === 'yape' || S.method === 'plin' ? payQr(s) : ''}
-    ${S.method !== 'efectivo' ? `<label>N° de operación (opcional)</label><input id="op" autocomplete="off" placeholder="para tu control" value="${App.esc(S.op)}">` : ''}
+    ${S.disc > 0 ? `<label>Motivo del descuento (opcional)</label><input id="reason" autocomplete="off" maxlength="100" placeholder="ej. cortesía, cumpleaños" value="${App.esc(S.reason)}">` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:center"><label>Método de pago</label><button class="btn sm" id="splitBtn">${S.split ? 'Pago único' : 'Dividir pago'}</button></div>
+    ${S.split ? splitUi() : `<div class="methods">${METHODS.map(m => `<button class="btn ${S.method === m ? 'active' : ''}" data-pm="${m}">${cap(m)}</button>`).join('')}</div>`}
+    ${S.split ? '<input id="cash" class="hidden">' : S.method === 'efectivo' ? `<label>Recibido</label><input id="cash" type="number" min="0" value="${S.cash}"><p id="change" style="margin-top:6px;font-weight:700;color:var(--ok)"></p>` : '<input id="cash" class="hidden">'}
+    ${!S.split && (S.method === 'yape' || S.method === 'plin') ? payQr(s) : ''}
+    ${!S.split && S.method !== 'efectivo' ? `<label>N° de operación (opcional)</label><input id="op" autocomplete="off" placeholder="para tu control" value="${App.esc(S.op)}">` : ''}
     <div class="sum" id="sum" style="margin:14px 0"></div>
     <button class="btn ok lg block" id="pay">Cobrar</button>`;
 }
@@ -146,12 +174,22 @@ async function pay() {
   const table = S.table, lines = App.tableInfo(table).orders.flatMap(o => o.items.map(i => ({ qty: i.qty, name: i.name, price: i.price })));
   const cash = S.cash;
   try {
-    const r = await App.api('POST', `/api/tables/${table}/pay`, { method: S.method, discountPercent: S.disc, tip: S.tip, opRef: S.method === 'efectivo' ? '' : S.op });
-    S.table = null; S.disc = 0; S.tip = 0; S.cash = ''; S.op = '';
+    const body = { method: S.method, discountPercent: S.disc, discountReason: S.reason, tip: S.tip, opRef: S.method === 'efectivo' ? '' : S.op };
+    if (S.split) body.payments = S.pays.map(x => ({ method: x.method, amount: +x.amount || 0 }));
+    const url = `/api/tables/${table}/pay`;
+    let r;
+    try { r = await App.api('POST', url, body); }
+    catch (e) { // descuento por encima del límite: pide la contraseña de un administrador y reintenta
+      if (e.status !== 403 || !/administrador/.test(e.message) || !(S.disc > 0)) throw e;
+      const pw = await App.askApproval('Este descuento (' + S.disc + '%) supera el límite permitido. Pide a un administrador que escriba su contraseña.');
+      if (!pw) return;
+      r = await App.api('POST', url, { ...body, approverPassword: pw });
+    }
+    resetBill(); S.table = null;
     App.toast(`Mesa ${table} cobrada: ${App.money(r.total)}`, 'ok');
     showReceipt({
       table, paidAt: Date.now(), lines, subtotal: r.subtotal, discount: r.discount, tax: r.tax, tip: r.tip,
-      total: r.total, method: r.method, cashier: App.me.name, cash: r.method === 'efectivo' && cash !== '' ? +cash : null,
+      total: r.total, method: r.method, payments: r.payments, taxIncluded: r.taxIncluded, cashier: App.me.name, cash: r.method === 'efectivo' && cash !== '' ? +cash : null,
     });
   } catch (e) { App.toast(e.message, 'err'); }
 }
@@ -159,16 +197,20 @@ async function pay() {
 // ---------- Ticket: vista, impresión y WhatsApp ----------
 const when = ts => new Date(ts).toLocaleString([], { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+// Detalle de un cobro dividido (vacío si se pagó con un solo método).
+const splitLines = R => (R.payments && R.payments.length > 1) ? R.payments.map(x => [x.method, x.amount]) : [];
+
 function receiptHtml(R) {
   const cfg = App.state.config;
   return `<div class="c"><b>${App.esc(cfg.name)}</b><br>${when(R.paidAt)}<br>Mesa ${R.table}</div><hr>
     ${R.lines.map(i => `<div class="r"><span>${i.qty}× ${App.esc(i.name)}</span><span>${App.money(i.price * i.qty)}</span></div>`).join('')}<hr>
     <div class="r"><span>Subtotal</span><span>${App.money(R.subtotal)}</span></div>
     ${R.discount ? `<div class="r"><span>Descuento</span><span>−${App.money(R.discount)}</span></div>` : ''}
-    ${R.tax ? `<div class="r"><span>Impuesto</span><span>${App.money(R.tax)}</span></div>` : ''}
+    ${R.tax ? `<div class="r"><span>${R.taxIncluded ? 'Impuesto incluido' : 'Impuesto'}</span><span>${App.money(R.tax)}</span></div>` : ''}
     ${R.tip ? `<div class="r"><span>Propina</span><span>${App.money(R.tip)}</span></div>` : ''}
     <div class="r"><b>TOTAL</b><b>${App.money(R.total)}</b></div>
     <div class="r"><span>Pago</span><span>${R.method}</span></div>
+    ${splitLines(R).map(([m, a]) => `<div class="r"><span>&nbsp;&nbsp;${m}</span><span>${App.money(a)}</span></div>`).join('')}
     ${R.cash != null ? `<div class="r"><span>Recibido / Vuelto</span><span>${App.money(R.cash)} / ${App.money(Math.max(0, R.cash - R.total))}</span></div>` : ''}
     <hr><div class="c">¡Gracias por su visita!</div>`;
 }
@@ -180,9 +222,9 @@ function receiptText(R) {
   for (const i of R.lines) L.push(`${i.qty}× ${i.name} — ${App.money(i.price * i.qty)}`);
   L.push('------------------------', `Subtotal: ${App.money(R.subtotal)}`);
   if (R.discount) L.push(`Descuento: −${App.money(R.discount)}`);
-  if (R.tax) L.push(`Impuesto: ${App.money(R.tax)}`);
+  if (R.tax) L.push(`${R.taxIncluded ? 'Impuesto incluido' : 'Impuesto'}: ${App.money(R.tax)}`);
   if (R.tip) L.push(`Propina: ${App.money(R.tip)}`);
-  L.push(`*TOTAL: ${App.money(R.total)}*`, `Pago: ${R.method}`, '', '¡Gracias por su visita! 🍽️');
+  L.push(`*TOTAL: ${App.money(R.total)}*`, `Pago: ${R.method}`, ...splitLines(R).map(([m, a]) => `  ${m}: ${App.money(a)}`), '', '¡Gracias por su visita! 🍽️');
   return L.join('\n');
 }
 
@@ -220,10 +262,11 @@ function makeTicketPdf(R) {
   rule();
   row('Subtotal', money(R.subtotal));
   if (R.discount) row('Descuento', '-' + money(R.discount));
-  if (R.tax) row('Impuesto', money(R.tax));
+  if (R.tax) row(R.taxIncluded ? 'Impuesto incluido' : 'Impuesto', money(R.tax));
   if (R.tip) row('Propina', money(R.tip));
   row('TOTAL', money(R.total), true);
   row('Pago', R.method);
+  splitLines(R).forEach(([m, a]) => row('  ' + m, money(a)));
   if (R.cash != null) row('Recibido / Vuelto', money(R.cash) + ' / ' + money(Math.max(0, R.cash - R.total)));
   rule();
   center('Gracias por su visita');

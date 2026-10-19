@@ -384,7 +384,7 @@ function report(from, to = Infinity) {
   for (const o of paid) {
     // Un cobro dividido reparte el total entre sus métodos.
     if (o.payments && o.payments.length) for (const x of o.payments) byMethod[x.method] = round2((byMethod[x.method] || 0) + x.amount);
-    else byMethod[o.method] = round2((byMethod[o.method] || 0) + (o.total || 0));
+    else if (o.method !== 'mixto') byMethod[o.method] = round2((byMethod[o.method] || 0) + (o.total || 0));
     if (o.bill) discounts = round2(discounts + (o.bill.discount || 0));
     byWaiter[o.waiter] = round2((byWaiter[o.waiter] || 0) + o.items.reduce((a, i) => a + i.price * i.qty, 0));
     for (const i of o.items) {

@@ -29,7 +29,7 @@
 <script src="/app.js"></script>
 <script>
 App.topbar('Administración');
-let tab = 'rep', days = 1, rep = null;
+let tab = 'rep', days = 1, rep = null, range = null; // range = { from, to } (YYYY-MM-DD) o null
 document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
   tab = b.dataset.tab;
   document.querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('active', x === b));
@@ -49,15 +49,21 @@ async function render() {
 }
 
 async function renderRep() {
-  try { rep = await App.api('GET', `/api/report?days=${days}`); } catch (e) { return App.toast(e.message, 'err'); }
+  const qs = range ? `from=${range.from}&to=${range.to}` : `days=${days}`;
+  try { rep = await App.api('GET', `/api/report?${qs}`); } catch (e) { return App.toast(e.message, 'err'); }
+  const iso = ts => { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const max = Math.max(1, ...rep.top.map(t => t[1]));
   document.getElementById('view').innerHTML = `
-    <div class="tabs">${[[1, 'Hoy'], [7, '7 días'], [30, '30 días']].map(([d, l]) => `<button class="btn sm ${days === d ? 'active' : ''}" data-d="${d}">${l}</button>`).join('')}</div>
+    <div class="tabs">${[[1, 'Hoy'], [7, '7 días'], [30, '30 días']].map(([d, l]) => `<button class="btn sm ${!range && days === d ? 'active' : ''}" data-d="${d}">${l}</button>`).join('')}
+      <span class="muted" style="align-self:center">o desde</span><input type="date" id="rf" style="width:auto" value="${range ? range.from : iso(rep.from)}">
+      <span class="muted" style="align-self:center">hasta</span><input type="date" id="rt" style="width:auto" value="${range ? range.to : iso(rep.to)}">
+      <a class="btn sm" href="/api/report.csv?${qs}">⬇️ Descargar Excel (CSV)</a></div>
     <div class="stats">
       <div class="card stat"><span class="muted">Ventas</span><b>${App.money(rep.sales)}</b></div>
       <div class="card stat"><span class="muted">Cuentas cobradas</span><b>${rep.tickets}</b></div>
       <div class="card stat"><span class="muted">Ticket promedio</span><b>${App.money(rep.tickets ? rep.sales / rep.tickets : 0)}</b></div>
       <div class="card stat"><span class="muted">Propinas</span><b>${App.money(rep.tips)}</b></div>
+      <div class="card stat"><span class="muted">Descuentos dados</span><b>${App.money(rep.discounts || 0)}</b></div>
       <div class="card stat"><span class="muted">Prep. promedio</span><b>${rep.avgPrepMin} min</b></div>
       <div class="card stat"><span class="muted">Cancelados</span><b>${rep.cancelled}</b></div></div>
     <div class="two">
@@ -65,7 +71,9 @@ async function renderRep() {
       <div class="card"><h3>Por método de pago</h3>${Object.entries(rep.byMethod).map(([m, v]) => `<div style="display:flex;justify-content:space-between;padding:6px 0"><span>${m}</span><b>${App.money(v)}</b></div>`).join('') || '<p class="muted">—</p>'}
         <h3 style="margin-top:18px">Por mesero</h3>${rep.byWaiter.map(([m, v]) => `<div style="display:flex;justify-content:space-between;padding:6px 0"><span>${App.esc(m)}</span><b>${App.money(v)}</b></div>`).join('') || '<p class="muted">—</p>'}</div>
     </div>`;
-  document.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { days = +b.dataset.d; renderRep(); });
+  document.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { days = +b.dataset.d; range = null; renderRep(); });
+  const applyRange = () => { const a = document.getElementById('rf').value, b = document.getElementById('rt').value; if (a && b && a <= b) { range = { from: a, to: b }; renderRep(); } };
+  document.getElementById('rf').onchange = document.getElementById('rt').onchange = applyRange;
 }
 
 const KIND = { cocina: '🍳 Cocina', barra: '🍹 Barra', directo: '🧊 De fábrica' };
@@ -81,6 +89,10 @@ function renderMenu() {
       <div><label>¿Quién lo despacha?</label><select id="st">${Object.keys(KIND).map(k => `<option value="${k}">${KIND[k]} — ${KIND_HELP[k]}</option>`).join('')}</select></div>
       <div id="stw" class="hidden"><label>Stock</label><input id="sk" type="number" min="0" placeholder="vacío = sin control"></div>
       <button class="btn primary" id="add">Agregar</button></div></div>
+    <div class="card" style="margin-top:14px"><h3>Categorías</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${s.categories.map(c => `<span class="badge" style="padding:6px 10px;display:inline-flex;gap:6px;align-items:center">${App.esc(c.name)}
+        <button class="btn sm" data-cn="${c.id}" title="Renombrar" style="padding:0 6px">✎</button><button class="btn sm danger" data-cd="${c.id}" title="Borrar" style="padding:0 6px">✕</button></span>`).join('')}</div>
+      <div style="display:flex;gap:8px"><input id="newcat" placeholder="Nueva categoría (ej. Cafés, Menú del día)"><button class="btn primary" id="addcat">Agregar</button></div></div>
     <div class="card" style="margin-top:14px"><table><tr><th>Producto</th><th>Categoría</th><th>Despacha</th><th class="r">Stock</th><th class="r">Precio</th><th></th></tr>
     ${s.menu.map(m => `<tr><td>${App.esc(m.name)} ${m.available ? '' : '<span class="badge agotado">agotado</span>'}</td><td>${App.esc(cat(m.category))}</td><td>${KIND[m.station]}</td>
       <td class="r">${m.stock == null ? '<span class="muted">—</span>' : `<b style="color:${m.stock <= 5 ? 'var(--danger)' : 'inherit'}">${m.stock}</b>`}</td>
@@ -93,6 +105,15 @@ function renderMenu() {
       App.toast('Producto agregado', 'ok');
     } catch (e) { App.toast(e.message, 'err'); }
   };
+  document.getElementById('addcat').onclick = () => App.api('POST', '/api/categories', { name: document.getElementById('newcat').value }).then(() => App.toast('Categoría agregada', 'ok')).catch(e => App.toast(e.message, 'err'));
+  document.querySelectorAll('[data-cn]').forEach(b => b.onclick = async () => {
+    const c = s.categories.find(x => x.id === b.dataset.cn), n = await App.ask({ title: 'Renombrar categoría', label: 'Nuevo nombre', value: c.name, okLabel: 'Guardar' });
+    if (n !== null) App.api('PATCH', '/api/categories/' + c.id, { name: n }).catch(e => App.toast(e.message, 'err'));
+  });
+  document.querySelectorAll('[data-cd]').forEach(b => b.onclick = async () => {
+    const c = s.categories.find(x => x.id === b.dataset.cd);
+    if (await App.confirm('¿Borrar categoría?', '"' + c.name + '" solo se puede borrar si no tiene productos.', 'Borrar')) App.api('DELETE', '/api/categories/' + c.id).catch(e => App.toast(e.message, 'err'));
+  });
   document.querySelectorAll('[data-x]').forEach(b => b.onclick = async () => {
     if (await App.confirm('¿Borrar producto?', 'Los pedidos ya hechos no se ven afectados.', 'Borrar')) App.api('DELETE', `/api/menu/${b.dataset.x}`).catch(e => App.toast(e.message, 'err'));
   });
@@ -198,7 +219,16 @@ function renderCfg() {
     <div class="two"><div><label>Moneda</label><input id="cur" value="${App.esc(c.currency)}"></div>
     <div><label>Número de mesas</label><input id="tb" type="number" min="1" max="100" value="${c.tables}"></div></div>
     <label>Código de país para WhatsApp</label><input id="cc" inputmode="numeric" placeholder="ej. 51 (Perú), 57 (Colombia), 52 (México)" value="${App.esc(c.countryCode || '')}">
-    <label>Impuesto % (IVA/IGV)</label><input id="tax" type="number" min="0" max="50" value="${c.taxPercent}">
+    <div class="two"><div><label>Impuesto % (IVA/IGV)</label><input id="tax" type="number" min="0" max="50" value="${c.taxPercent}"></div>
+    <div><label>Descuento máx. sin autorización %</label><input id="md" type="number" min="0" max="100" value="${c.maxDiscountNoAuth ?? 10}"></div></div>
+    <label style="display:flex;gap:10px;align-items:flex-start;text-transform:none;letter-spacing:0;font-size:14px;color:var(--text);margin-top:12px;cursor:pointer">
+      <input id="ti" type="checkbox" style="width:auto;margin-top:3px" ${c.taxIncluded ? 'checked' : ''}>
+      <span><b>Los precios de la carta ya incluyen el impuesto</b><br><span class="muted">El ticket muestra cuánto del total es impuesto, pero no lo suma otra vez. Si lo dejas apagado, el impuesto se suma al subtotal.</span></span></label>
+    <label>El día de trabajo empieza a las (hora)</label><input id="dsh" type="number" min="0" max="12" value="${c.dayStartHour ?? 4}">
+    <p class="muted" style="font-size:13px;margin-top:4px">Si cierras de madrugada, las ventas hasta esa hora cuentan para el día anterior en reportes y cobros de hoy.</p>
+    <label style="display:flex;gap:10px;align-items:flex-start;text-transform:none;letter-spacing:0;font-size:14px;color:var(--text);margin-top:12px;cursor:pointer">
+      <input id="ll" type="checkbox" style="width:auto;margin-top:3px" ${c.loginList !== false ? 'checked' : ''}>
+      <span><b>Mostrar la lista de usuarios al iniciar sesión</b><br><span class="muted">Si lo apagas, cada persona escribe su nombre de usuario (más privado).</span></span></label>
     <label style="display:flex;gap:10px;align-items:flex-start;text-transform:none;letter-spacing:0;font-size:14px;color:var(--text);margin-top:16px;cursor:pointer">
       <input id="mb" type="checkbox" style="width:auto;margin-top:3px" ${c.mergeBar ? 'checked' : ''}>
       <span><b>Cocina y barra son la misma estación</b><br><span class="muted">Si una sola persona prepara platos y bebidas, todo llega en <b>una sola comanda</b> a la pantalla de Cocina (las bebidas marcadas con 🍹) y no se usa la pantalla de Barra. Cámbialo cuando no haya pedidos en preparación.</span></span></label>
@@ -210,7 +240,7 @@ function renderCfg() {
     ${qrCard('yape', 'Yape', c)}${qrCard('plin', 'Plin', c)}`;
   document.getElementById('save').onclick = async () => {
     try {
-      await App.api('PUT', '/api/config', { name: name.value, currency: cur.value, tables: tb.value, taxPercent: tax.value, mergeBar: mb.checked, countryCode: cc.value, waiterCharges: wc.checked });
+      await App.api('PUT', '/api/config', { name: name.value, currency: cur.value, tables: tb.value, taxPercent: tax.value, taxIncluded: ti.checked, maxDiscountNoAuth: md.value, dayStartHour: dsh.value, loginList: ll.checked, mergeBar: mb.checked, countryCode: cc.value, waiterCharges: wc.checked });
       App.toast('Ajustes guardados', 'ok');
     } catch (e) { App.toast(e.message, 'err'); }
   };

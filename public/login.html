@@ -44,7 +44,13 @@ let chosen = null;
 
 fetch('/api/me').then(async r => { if (r.ok) { const u = await r.json(); location.href = u.home; } });
 
-fetch('/api/login-users').then(r => r.json()).then(users => {
+fetch('/api/login-users').then(r => r.json()).then(({ hidden, users }) => {
+  if (hidden) { // el local no muestra la lista: se escribe el nombre
+    chosen = { name: '' }; $('pick').classList.add('hidden'); $('sub').classList.add('hidden'); $('pw').classList.remove('hidden');
+    $('who').innerHTML = '<input id="uname" placeholder="Tu nombre de usuario" autocomplete="username" autofocus>'; $('av').classList.add('hidden'); $('back').classList.add('hidden');
+    $('uname').onkeydown = e => { if (e.key === 'Enter') $('pass').focus(); };
+    return;
+  }
   $('pick').innerHTML = users.map(u => `<button data-id="${u.id}"><div class="av">${esc(u.name[0].toUpperCase())}</div><b>${esc(u.name)}</b><small>${ROLES[u.role]}</small></button>`).join('')
     || '<p class="muted">No hay usuarios.</p>';
   $('pick').querySelectorAll('button').forEach(b => b.onclick = () => {
@@ -58,7 +64,7 @@ fetch('/api/login-users').then(r => r.json()).then(users => {
 async function go() {
   $('err').textContent = ''; $('go').disabled = true;
   try {
-    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: chosen.id, password: $('pass').value }) });
+    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(chosen.id ? { userId: chosen.id, password: $('pass').value } : { name: $('uname') ? $('uname').value : '', password: $('pass').value }) });
     const d = await r.json();
     if (!r.ok) { $('err').textContent = d.error || 'Error'; $('pass').select(); }
     else location.href = d.home;
